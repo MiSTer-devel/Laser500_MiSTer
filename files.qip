@@ -4,6 +4,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE rtl/laser500.sv
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/downloader.sv
 set_global_assignment -name VERILOG_FILE rtl/eraser.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/VTL_chip.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/laser500_floppy.sv
 set_global_assignment -name VERILOG_FILE rtl/keyboard.v
 set_global_assignment -name SYSTEMVERILOG_FILE rtl/dpram.sv
 set_global_assignment -name VHDL_FILE rtl/T80/T80pa.vhd

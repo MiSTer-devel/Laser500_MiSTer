@@ -30,8 +30,24 @@ module laser500 (
 	input wire        ioctl_wr,
 	input wire [24:0] ioctl_addr,
     input wire [7:0]  ioctl_data,
-	input wire [7:0]  ioctl_index
+	input wire [7:0]  ioctl_index,
 
+	// floppy (hps_io S0/S1)
+	input wire        fdc_enable,      // OSD: interface fitted
+	output wire       fdc_active,      // drive motor on (LED)
+	output wire [1:0] fdc_mounted,
+	input wire  [1:0] img_mounted,
+	input wire        img_readonly,
+	input wire [63:0] img_size,
+	output wire [31:0] sd_lba,
+	output wire  [5:0] sd_blk_cnt,
+	output wire  [1:0] sd_rd,
+	output wire  [1:0] sd_wr,
+	input wire   [1:0] sd_ack,
+	input wire  [13:0] sd_buff_addr,
+	input wire   [7:0] sd_buff_dout,
+	output wire  [7:0] sd_buff_din,
+	input wire         sd_buff_wr
 );
 
 /******************************************************************************************/
@@ -74,8 +90,8 @@ T80pa cpu
 	
 	.iorq_n  ( cpu_iorq_n    ),   // IO REQUEST 0=read from I/O
 	.mreq_n  ( cpu_mreq_n    ),   // MEMORY REQUEST, idicates the bus has a valid memory address
-	.m1_n    ( 1'b1          ),   // connected to expansion port on the Laser 500
-	.rfsh_n  ( 1'b1          ),   // connected to expansion port on the Laser 500
+	.m1_n    ( cpu_m1_n      ),   // expansion port on the Laser 500
+	.rfsh_n  (               ),   // expansion port on the Laser 500
 
 	.busrq_n ( 1'b1          ),   // connected to VCC on the Laser 500
 	.int_n   ( video_vs      ),   // VSYNC interrupt
@@ -112,25 +128,16 @@ tv80s cpu
 /******************************************************************************************/
 /******************************************************************************************/
 
-///////////////////////////////////////////////////////////////////////////////
-// 1. Generate a valid strobe whenever ps2_key[10] toggles
-///////////////////////////////////////////////////////////////////////////////
+// One-clock strobe for each new ps2_key event (bit 10 toggles per event).
+// keyboard.v applies the key while valid is high, so it must be a pulse.
 wire [ 6:0] KD;
+wire        reset_key;   // keyboard reset key (not wired to the CPU yet)
 reg old_state;
 reg key_strobe;
 
-always @(posedge F14M or posedge CPU_RESET) begin
-    if (CPU_RESET) begin
-        old_state   <= 1'b0;
-        key_strobe  <= 1'b0;
-    end else begin
-        // Watch bit [10] for toggles
-        old_state <= ps2_key[10];
-        if (old_state != ps2_key[10]) begin
-            // Toggle key_strobe every time ps2_key[10] changes
-            key_strobe <= ~key_strobe;
-        end
-    end
+always @(posedge F14M) begin
+	old_state  <= ps2_key[10];
+	key_strobe <= ~CPU_RESET && (old_state != ps2_key[10]);
 end
 
 wire [15:0] adapter_key;
@@ -218,10 +225,48 @@ VTL_chip VTL_chip
 	.CASIN        ( CASIN   ),
 	
 	.alt_font     ( alt_font ),
-	.cnt          ( hcnt ),
+	.cnt          ( ),
 	
-	.img_mounted  ( img_mounted ),
-	.img_size     ( img_size    ) 
+	.fdc_en       ( fdc_enable ),
+	.fdc_rd       ( fdc_rd     ),
+	.fdc_wr       ( fdc_wr     ),
+	.fdc_dout     ( fdc_dout   )
+);
+
+/******************************************************************************************/
+/***************************************** @floppy ****************************************/
+/******************************************************************************************/
+
+wire       fdc_rd, fdc_wr;
+wire [7:0] fdc_dout;
+
+laser500_floppy floppy
+(
+	.clk          ( F14M          ),
+	.reset        ( CPU_RESET     ),
+
+	.io_rd        ( fdc_rd        ),
+	.io_wr        ( fdc_wr        ),
+	.io_port      ( cpu_addr[1:0] ),
+	.io_din       ( cpu_dout      ),
+	.io_dout      ( fdc_dout      ),
+
+	.active       ( fdc_active    ),
+
+	.img_mounted  ( img_mounted   ),
+	.img_readonly ( img_readonly  ),
+	.img_size     ( img_size      ),
+	.sd_lba       ( sd_lba        ),
+	.sd_blk_cnt   ( sd_blk_cnt    ),
+	.sd_rd        ( sd_rd         ),
+	.sd_wr        ( sd_wr         ),
+	.sd_ack       ( sd_ack        ),
+	.sd_buff_addr ( sd_buff_addr  ),
+	.sd_buff_dout ( sd_buff_dout  ),
+	.sd_buff_din  ( sd_buff_din   ),
+	.sd_buff_wr   ( sd_buff_wr    ),
+
+	.mounted      ( fdc_mounted   )
 );
 
 /******************************************************************************************/
@@ -308,12 +353,12 @@ assign WAIT = 0;
 //
 						
 
-wire        sdram_clkref ;
-wire [24:0] sdram_addr   ;
-wire        sdram_wr     ;
-wire        sdram_rd     ;
+reg         sdram_clkref ;
+reg  [24:0] sdram_addr   ;
+reg         sdram_wr     ;
+reg         sdram_rd     ;
 wire [7:0]  sdram_dout   ; 
-wire [7:0]  sdram_din    ; 
+reg  [7:0]  sdram_din    ; 
 
 always @(*) begin
 	if(is_downloading && download_wr) begin

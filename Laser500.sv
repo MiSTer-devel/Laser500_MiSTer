@@ -41,7 +41,7 @@ assign HDMI_BOB_DEINT = 0;
 assign AUDIO_S = 0;
 assign AUDIO_MIX = 0;
 
-assign LED_DISK = 0;
+assign LED_DISK = {1'b0, fdc_active};
 assign LED_POWER = 0;
 assign BUTTONS = 0;
 
@@ -54,6 +54,8 @@ assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
 `include "build_id.v" 
 localparam CONF_STR = {
 	"LASER500;;",
+	"S0,NICDSK,Pri. disk 1;",
+	"S1,NICDSK,Disk 2;",
 	"-;",
 	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"O2,Custom charset ROM,Off,On;",
@@ -78,7 +80,20 @@ wire  [7:0] ioctl_data;
 wire [31:0] joystick_0, joystick_1;
 wire st_alt_font = status[2];
 
-hps_io #(.CONF_STR(CONF_STR)) hps_io
+// floppy (S0/S1)
+wire  [1:0] img_mounted;
+wire        img_readonly;
+wire [63:0] img_size;
+wire [31:0] sd_lba;
+wire  [5:0] sd_blk_cnt;
+wire  [1:0] sd_rd, sd_wr, sd_ack;
+wire [13:0] sd_buff_addr;
+wire  [7:0] sd_buff_dout, sd_buff_din;
+wire        sd_buff_wr;
+wire        fdc_active;
+wire  [1:0] fdc_mounted;
+
+hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
 (
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
@@ -100,7 +115,20 @@ hps_io #(.CONF_STR(CONF_STR)) hps_io
 	.status(status),
 	.status_menumask({status[5]}),
 	
-	.ps2_key(ps2_key)
+	.ps2_key(ps2_key),
+
+	.img_mounted(img_mounted),
+	.img_readonly(img_readonly),
+	.img_size(img_size),
+	.sd_lba('{sd_lba, sd_lba}),
+	.sd_blk_cnt('{sd_blk_cnt, sd_blk_cnt}),
+	.sd_rd(sd_rd),
+	.sd_wr(sd_wr),
+	.sd_ack(sd_ack),
+	.sd_buff_addr(sd_buff_addr),
+	.sd_buff_dout(sd_buff_dout),
+	.sd_buff_din('{sd_buff_din, sd_buff_din}),
+	.sd_buff_wr(sd_buff_wr)
 );
 
 ///////////////////////   CLOCKS   ///////////////////////////////
@@ -119,7 +147,20 @@ pll pll
 	.outclk_3(F3M)
 );
 
-wire reset = RESET | status[0] | buttons[1];
+// A disk mounted within about 3 s of the core starting (an MGL, or a quick OSD
+// mount) resets the machine once, so the ROM finds the interface and boots
+// from it. Later mounts just fit the interface; Reset boots the disk.
+reg [25:0] boot_window = 0;          // counts to 3<<24 (3.4 s of F14M)
+reg  [1:0] fdc_mounted_old = 0;
+reg  [7:0] mount_reset = 0;
+always @(posedge clk_sys) begin
+	fdc_mounted_old <= fdc_mounted;
+	if (~&boot_window[25:24]) boot_window <= boot_window + 1'd1;
+	if (mount_reset) mount_reset <= mount_reset - 1'd1;
+	if (~&boot_window[25:24] && !fdc_mounted_old && fdc_mounted) mount_reset <= 8'hFF;
+end
+
+wire reset = RESET | status[0] | buttons[1] | (mount_reset != 0);
 //////////////////////////////////////////////////////////////////
 
 wire [1:0] col = status[4:3];
@@ -216,7 +257,25 @@ laser500 laser500 (
 	.ioctl_wr(ioctl_wr),
 	.ioctl_addr(ioctl_addr),
 	.ioctl_data(ioctl_data),
-	.ioctl_index(ioctl_index)
+	.ioctl_index(ioctl_index),
+
+	// floppy interface: fitted while a disk image is mounted (the ROM boots
+	// from it at reset; with no disk it would wait for one forever)
+	.fdc_enable   ( |fdc_mounted  ),
+	.fdc_active   ( fdc_active    ),
+	.fdc_mounted  ( fdc_mounted   ),
+	.img_mounted  ( img_mounted   ),
+	.img_readonly ( img_readonly  ),
+	.img_size     ( img_size      ),
+	.sd_lba       ( sd_lba        ),
+	.sd_blk_cnt   ( sd_blk_cnt    ),
+	.sd_rd        ( sd_rd         ),
+	.sd_wr        ( sd_wr         ),
+	.sd_ack       ( sd_ack        ),
+	.sd_buff_addr ( sd_buff_addr  ),
+	.sd_buff_dout ( sd_buff_dout  ),
+	.sd_buff_din  ( sd_buff_din   ),
+	.sd_buff_wr   ( sd_buff_wr    )
 );
 
 /******************************************************************************************/

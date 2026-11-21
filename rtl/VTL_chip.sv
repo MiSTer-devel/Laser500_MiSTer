@@ -49,9 +49,15 @@ module VTL_chip
 	input  alt_font,
 	output [2:0] cnt,
 	
-	input          img_mounted, 
-   input   [31:0] img_size    
+	// floppy interface, ports 10h-13h: one strobe per I/O cycle
+	input            fdc_en,      // interface fitted
+	output reg       fdc_rd,
+	output reg       fdc_wr,
+	input      [7:0] fdc_dout
 );
+
+wire fdc_port = fdc_en && (A[7:2] == 6'b000100);
+reg  io_seen;   // the current I/O cycle has been handled
 
 reg [7:0] hfp = 10;         // horizontal front porch, unused time before hsync
 reg [7:0] hsw = 66;         // hsync width
@@ -226,6 +232,10 @@ always@(posedge F14M) begin
 	end
 	else begin		   
 		
+		fdc_rd <= 0;
+		fdc_wr <= 0;
+		if (!IORQ) io_seen <= 0;
+
 		// main counters 
 		if(hcnt == hsw+hbp+H+hfp-1) begin
 			hcnt <= 10'd0;
@@ -314,7 +324,13 @@ always@(posedge F14M) begin
 					
 			// Z80 IO 
 			if(CPU_cnt == 2 && IORQ && !skip_beat) begin
-				if(RD) begin				
+				io_seen <= 1;
+				if(fdc_port) begin
+					// floppy: read data and side effects once per I/O cycle
+					if(RD && !io_seen) begin DI <= fdc_dout; fdc_rd <= 1; end
+					if(WR && !io_seen) fdc_wr <= 1;
+				end
+				else if(RD) begin				
 					if(A[7:0] == 'h2b) begin
 						// joystick0 8 directions: ---FEWSN					
 						// Mist: 0-right, 1-left, 2-down, 3-up, 4-A, 5-B, 6-SELECT, 7-START, 8-X, 9-Y, 10-L, 11-R, 12-L2, 13-R2, 15-L3, 15-R
@@ -367,9 +383,6 @@ always@(posedge F14M) begin
 					else if(A[7:0] == 'ha3) DI <= img_size[31:24];						
 					else if(A[7:0] == 'ha4) DI <= { 7'b0, img_mounted };						
 					*/
-					else if(A[7:0] == 'ha0) DI <= hsw;						
-					else if(A[7:0] == 'ha1) DI <= hbp;						
-					else if(A[7:0] == 'ha2) DI <= hfp;						
 					else
 						DI <= { DI[7:1], 1'b1 }; // value returned from unused ports
 						
