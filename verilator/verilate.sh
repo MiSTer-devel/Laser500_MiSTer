@@ -11,7 +11,7 @@ verilator \
 	../rtl/VTL_chip.sv \
 	../rtl/eraser.v \
 	../rtl/keyboard.v \
-	../rtl/dac.v \
+	../rtl/dpram.sv \
 	../rtl/rom_charset_alternate.v \
 	../rtl/rom_charset.v \
 	../rtl/tv80/tv80s.v \

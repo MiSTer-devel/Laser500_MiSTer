@@ -21,8 +21,8 @@ module laser500 (
 
 	input wire [10:0] ps2_key,
 
-	output wire AUDIO_L,
-	output wire AUDIO_R,
+	output reg [15:0] AUDIO_L,
+	output reg [15:0] AUDIO_R,
 
 	input wire  UART_RX,
 
@@ -301,18 +301,12 @@ assign WAIT = 0;
 /******************************************************************************************/
 /******************************************************************************************/
 
-reg LED_ON = 0;
-assign LED = ~LED_ON;
 
 	
 //
 // RAM (SDRAM)
 //
 						
-// SDRAM control signals
-wire ram_clock;
-assign SDRAM_CKE = pll_locked; // was: 1'b1;
-//assign SDRAM_CLK = ram_clock;
 
 wire        sdram_clkref ;
 wire [24:0] sdram_addr   ;
@@ -362,26 +356,18 @@ end
 
 wire BUZZER;
 wire CASOUT;
-wire audio;
 
 //
 // BUZZER for emulating the keyboard builtin speaker
 // CASIN for tape monitor
 // CASOUT for save to tape wire
+// One level on the 16-bit unsigned output (AUDIO_S = 0).
 //
-
-dac #(.C_bits(16)) dac_AUDIO_L
-(
-	.clk_i(F14M),
-    .res_n_i(pll_locked),	
-	.dac_i({ BUZZER ^ CASIN ^ (~CASOUT), 15'b0000000 }),
-	.dac_o(audio)
-);
-
+wire speaker = BUZZER ^ CASIN ^ (~CASOUT);
 
 always @(posedge F14M) begin
-	AUDIO_L <= audio;
-	AUDIO_R <= audio;
+	AUDIO_L <= speaker ? 16'h4000 : 16'h0000;
+	AUDIO_R <= speaker ? 16'h4000 : 16'h0000;
 end
 
 dpram #(8, 18) dpram

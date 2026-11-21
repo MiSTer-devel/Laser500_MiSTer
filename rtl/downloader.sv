@@ -74,10 +74,10 @@ wire extension_index = dio_index[7:6];
 wire is_rom_download = menu_index == 0;
 wire is_prg_download = menu_index == 1;
 
-parameter ROM_START_ADDR;   // start of ROM in SDRAM
-parameter PRG_START_ADDR;   // start of PRG in SDRAM
-parameter PTR_PROGND;       // SDRAM address of END pointer
-parameter PTR_END_BASE;     // base value to sum to END pointer
+parameter ROM_START_ADDR = 0;   // start of ROM in SDRAM
+parameter PRG_START_ADDR = 0;   // start of PRG in SDRAM
+parameter PTR_PROGND = 0;       // SDRAM address of END pointer
+parameter PTR_END_BASE = 0;     // base value to sum to END pointer
 
 wire [24:0] PRG_END_ADDR     = PRG_START_ADDR + dio_addr;    // TODO substitute with file lenght
 wire [15:0] PTR_PROGND_VALUE = PTR_END_BASE + dio_addr + 1;  // points to the byte after the BASIC program

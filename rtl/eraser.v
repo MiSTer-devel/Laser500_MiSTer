@@ -17,8 +17,8 @@ module eraser(
 
 reg [24:0] pos;
 
-parameter [24:0] START_RAM;
-parameter [24:0] END_RAM;
+parameter [24:0] START_RAM = 0;
+parameter [24:0] END_RAM = 0;
 
 // detect trigger
 always @(posedge clk) begin
