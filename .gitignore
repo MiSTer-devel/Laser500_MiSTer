@@ -55,3 +55,9 @@ verilator/.vs/sim/FileContentIndex/8df103c5-9675-4c0c-bd80-d820a28116d3.vsidx
 verilator/.vs/sim/FileContentIndex/05287e3e-3bcf-464b-bc5a-1e8d0080fc77.vsidx
 verilator/.vs/sim/FileContentIndex/a62e0763-687d-4c78-8f03-83ad7654379c.vsidx
 verilator/.vs/sim/FileContentIndex/d8b9b951-a47c-4c1b-879b-52e1d77ee811.vsidx
+# local test data and ROMs (never commit ROMs)
+*.rom
+refs/
+software/
+verilator/*.vcd
+*.stp
