@@ -41,6 +41,8 @@ assign KD = ((KA[ 0] == 0) ? KM[ 0] : 7'b1111111) &
 // debug
 assign debug = KM[0][0];
 				
+initial reset_key = 0;
+
 // keyboard matrix (12 rows x 7 columns)
 reg [6:0] KM [11:0]; 
 
@@ -173,7 +175,6 @@ always @(posedge clk) begin
 		if(valid) begin
 				case(key)	
                		KEY_RESET        : begin reset_key <= ~key_status; end													
-					KEY_ALT_LEFT     : begin reset_key <= ~key_status; end													
 					KEY_SHIFT        : begin KM['h0][6] <= key_status; end
 					KEY_SHIFT_RIGHT  : begin KM['h0][6] <= key_status; end
 					KEY_Z            : begin KM['h0][5] <= key_status; end 

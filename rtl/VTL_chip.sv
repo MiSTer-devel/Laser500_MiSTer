@@ -6,6 +6,7 @@ module VTL_chip
 	input    F14M,	           // pixel clock 14.77873   (14688000 in laser500emu)
 	input	 F14Mx2,
 	input    RESET,           // initialize at power up
+	input    KEY_RESET,       // keyboard Reset key: bank 0 back to the ROM
 	input    BLANK,           // blank signal - nothing is done	
 		
 	// cpu interface
@@ -42,6 +43,8 @@ module VTL_chip
 	output [5:0] b,
 
 	output non_visible_area,
+	output hblank,
+	output vblank,
 	
 	output reg BUZZER,
 	output reg CASOUT,   // mapped I/O bit 2  		
@@ -187,7 +190,9 @@ assign hsync = (hcnt < hsw) ? 0 : 1;
 assign vsync = (vcnt <   2) ? 0 : 1;
 
 //wire non_visible_area = hcnt < hsw+hbp || vcnt < 64 || vcnt > 250 || hcnt >= hsw+hbp+H;                        
-assign non_visible_area = hcnt < hsw+hbp || vcnt < 4 || vcnt > (312-2) || hcnt >= hsw+hbp+H;
+assign hblank = hcnt < hsw+hbp || hcnt >= hsw+hbp+H;
+assign vblank = vcnt < 4 || vcnt > (312-2);
+assign non_visible_area = hblank || vblank;
 						  
 // calculate foreground and background colors						  
 assign fg = (vdc_graphic_mode_enabled && (vdc_graphic_mode_number == 5 || vdc_graphic_mode_number == 2)) || (!vdc_graphic_mode_enabled && vdc_text80_enabled) ? vdc_text80_foreground : fgbg[7:4];
@@ -235,6 +240,7 @@ always@(posedge F14M) begin
 		fdc_rd <= 0;
 		fdc_wr <= 0;
 		if (!IORQ) io_seen <= 0;
+		if (KEY_RESET) banks[0] <= 0;
 
 		// main counters 
 		if(hcnt == hsw+hbp+H+hfp-1) begin
@@ -427,9 +433,6 @@ always@(posedge F14M) begin
 						'h12: ;
 						'h13: ;
 						'h14: ;
-					   'ha0: hsw <= DO;						
-					   'ha1: hbp <= DO;						
-					   'ha2: hfp <= DO;						
 						
 							//if(emulate_fdc) floppy_write_port(port & 0xFF, value); 
 							//return;     				

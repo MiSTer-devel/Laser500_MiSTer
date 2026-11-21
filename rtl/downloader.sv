@@ -68,8 +68,8 @@ reg [2:0] state = 0;
 // state = 2  writing high byte pointer
 // state = 3  end
 
-wire menu_index      = dio_index[5:0];
-wire extension_index = dio_index[7:6];
+wire [5:0] menu_index      = dio_index[5:0];
+wire [1:0] extension_index = dio_index[7:6];
 
 wire is_rom_download = menu_index == 0;
 wire is_prg_download = menu_index == 1;

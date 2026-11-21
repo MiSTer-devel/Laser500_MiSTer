@@ -30,7 +30,6 @@ assign {SD_SCK, SD_MOSI, SD_CS} = 'Z;
 assign {SDRAM_DQ, SDRAM_A, SDRAM_BA, SDRAM_CLK, SDRAM_CKE, SDRAM_DQML, SDRAM_DQMH, SDRAM_nWE, SDRAM_nCAS, SDRAM_nRAS, SDRAM_nCS} = 'Z;
 assign {DDRAM_CLK, DDRAM_BURSTCNT, DDRAM_ADDR, DDRAM_DIN, DDRAM_BE, DDRAM_RD, DDRAM_WE} = '0;  
 
-assign VGA_SL = 0;
 assign VGA_F1 = 0;
 assign VGA_SCALER  = 0;
 assign VGA_DISABLE = 0;
@@ -47,25 +46,50 @@ assign BUTTONS = 0;
 
 //////////////////////////////////////////////////////////////////
 
-wire [1:0] ar = status[122:121];
-assign VIDEO_ARX = (!ar) ? 12'd4 : (ar - 1'd1);
-assign VIDEO_ARY = (!ar) ? 12'd3 : 12'd0;
+// the settings the machine runs with: taken from the OSD at every reset
+// (Apply and reset, the board's reset, a core reload)
+reg [127:0] cfg;
+wire        reset;
+
 
 `include "build_id.v" 
+// OSD (~/dev2/osd-standard.md): media on the top page, then P1 Machine,
+// P2 Video, "Changes pending" and Apply and reset. Settings are taken from
+// the OSD at every reset (cfg).
+// status bits: 0 Apply and reset; 2 Character set; 6 Disk interface;
+// 9:8 Scale; 10 Vertical crop; 13:11 Scandoubler Fx; 122:121 Aspect ratio
+// (the video rows act at once: status, not cfg, and not in pending).
 localparam CONF_STR = {
 	"LASER500;;",
-	"S0,NICDSK,Pri. disk 1;",
-	"S1,NICDSK,Disk 2;",
 	"-;",
-	"O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
-	"O2,Custom charset ROM,Off,On;",
+	"H1S0,NICDSK,Pri. disk 1;",
+	"h1-;",
+	"H1S1,NICDSK,Disk 2;",
+	"h1-;",
 	"F1,PRGBIN,Load Program;",
+	"F0,ROM,Load ROM;",
 	"-;",
-	"R0,Reset;",
-	"V,v",`BUILD_DATE 
+	"P1,Machine;",
+	"P2,Video;",
+	"-;",
+	"h0-,Changes pending;",
+	"R[0],Apply and reset;",
+
+	"P1O[6],Disk interface,Auto,Off;",
+
+	"P2O[2],Character set,Standard,Alternate;",
+	"P2-;",
+	"P2O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
+	"P2O[9:8],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
+	"P2O[10],Vertical crop,Off,216p(5x);",
+	"P2O[13:11],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+
+	"v,1;",
+	"V,v",`BUILD_DATE
 };
 
 wire forced_scandoubler;
+wire [21:0] gamma_bus;
 wire  [1:0] buttons;
 wire [127:0] status;
 wire [10:0] ps2_key;
@@ -78,7 +102,10 @@ wire [24:0] ioctl_addr;
 wire  [7:0] ioctl_data;
 
 wire [31:0] joystick_0, joystick_1;
-wire st_alt_font = status[2];
+wire st_alt_font = cfg[2];
+
+wire pending = {status[2], status[6]} != {cfg[2], cfg[6]};
+wire fdc_off = status[6];          // hide the disk rows as soon as it is chosen
 
 // floppy (S0/S1)
 wire  [1:0] img_mounted;
@@ -98,7 +125,7 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
 	.EXT_BUS(),
-	.gamma_bus(),
+	.gamma_bus(gamma_bus),
 
 	.forced_scandoubler(forced_scandoubler),
 
@@ -113,7 +140,7 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
 	 	
 	.buttons(buttons),
 	.status(status),
-	.status_menumask({status[5]}),
+	.status_menumask({14'd0, fdc_off, pending}),   // bit 0 Changes pending, bit 1 disk rows hidden
 	
 	.ps2_key(ps2_key),
 
@@ -141,11 +168,15 @@ pll pll
 	.refclk(CLK_50M),
 	.locked(pll_locked),
 	.rst(0),
-	.outclk_0(),
+	.outclk_0(clk_vid),
 	.outclk_1(F14Mx2),
 	.outclk_2(F14M),
 	.outclk_3(F3M)
 );
+
+// Disk interface Auto: fitted while an image is mounted (with no disk the
+// ROM would wait for one forever). Off: never.
+wire fdc_enable = |fdc_mounted & ~cfg[6];
 
 // A disk mounted within about 3 s of the core starting (an MGL, or a quick OSD
 // mount) resets the machine once, so the ROM finds the interface and boots
@@ -157,37 +188,100 @@ always @(posedge clk_sys) begin
 	fdc_mounted_old <= fdc_mounted;
 	if (~&boot_window[25:24]) boot_window <= boot_window + 1'd1;
 	if (mount_reset) mount_reset <= mount_reset - 1'd1;
-	if (~&boot_window[25:24] && !fdc_mounted_old && fdc_mounted) mount_reset <= 8'hFF;
+	if (~&boot_window[25:24] && !fdc_mounted_old && fdc_mounted && !cfg[6]) mount_reset <= 8'hFF;
 end
 
-wire reset = RESET | status[0] | buttons[1] | (mount_reset != 0);
+assign reset = RESET | status[0] | buttons[1] | (mount_reset != 0);
+always @(posedge clk_sys) if (reset) cfg <= status;
 //////////////////////////////////////////////////////////////////
 
-wire [1:0] col = status[4:3];
 
 wire video_hs;
 wire video_vs;
-wire ce_pix;
-wire [7:0] video;
-
 wire [5:0] video_r;
 wire [5:0] video_g; 
 wire [5:0] video_b;
 wire non_visible_area;
+wire hblank, vblank;
 
-assign CLK_VIDEO = clk_sys;
-assign CE_PIXEL = 1'b1;
+/////////////////////////////  video out  ////////////////////////////
+// ~/dev2/video-standard.md. One machine pixel per F14M clock (the 80-column
+// dot clock; 40 columns repeat pixels). CLK_VIDEO = 4 x F14M from the same
+// PLL; ce_pix marks each F14M clock.
+//
+// Picture sent (DE, border included): 798 x 307 at 14.7785 MHz.
+// Original aspect: PAR = 7.375 MHz (PAL square pixel) / 14.7785 MHz,
+//   798 x PAR : 307 = 398.2 : 307  ->  ARX:ARY = 3982:3070 (1.297).
+// Vertical crop 216p(5x): 216 of the 307 lines, centred on the 192-line
+// picture (DE lines 61-252): window start (307-216)/2 + 4 = 49.
+wire        clk_vid;
+assign CLK_VIDEO = clk_vid;
 
-assign VGA_DE = ~non_visible_area;
-assign VGA_HS = video_hs;
-assign VGA_VS = video_vs;
-assign VGA_R  = { video_r[5:4] , video_r };
-assign VGA_G  = { video_g[5:4] , video_g };
-assign VGA_B  = { video_b[5:4] , video_b };
+reg  pix_tog = 0;
+always @(posedge clk_sys) pix_tog <= ~pix_tog;
+reg  [1:0] pix_tog_v;
+reg        ce_pix;
+always @(posedge clk_vid) begin
+	pix_tog_v <= {pix_tog_v[0], pix_tog};
+	ce_pix    <= pix_tog_v[1] ^ pix_tog_v[0];
+end
+
+wire [1:0] ar  = status[122:121];
+wire [2:0] sfx = status[13:11];             // 0 None, 1 HQ2x, 2-4 CRT 25/50/75%
+wire [2:0] sl  = sfx ? sfx - 3'd1 : 3'd0;
+wire       scandoubler = (sfx != 3'd0) || forced_scandoubler;
+assign VGA_SL = sl[1:0];
+
+wire vcrop_en = status[10] && HDMI_WIDTH == 1920 && HDMI_HEIGHT == 1080
+                && !forced_scandoubler && sfx == 3'd0;
+
+wire vga_de_mix;
+
+video_mixer #(.LINE_LENGTH(800), .GAMMA(1)) video_mixer
+(
+	.CLK_VIDEO(clk_vid),
+	.CE_PIXEL(CE_PIXEL),
+	.ce_pix(ce_pix),
+	.scandoubler(scandoubler),
+	.hq2x(sfx == 3'd1),
+	.gamma_bus(gamma_bus),
+	.R({video_r, video_r[5:4]}),
+	.G({video_g, video_g[5:4]}),
+	.B({video_b, video_b[5:4]}),
+	.HSync(~video_hs),                       // VTL syncs are active low: positive here
+	.VSync(~video_vs),
+	.HBlank(hblank),
+	.VBlank(vblank),
+	.HDMI_FREEZE(HDMI_FREEZE),
+	.freeze_sync(),
+	.VGA_R(VGA_R),
+	.VGA_G(VGA_G),
+	.VGA_B(VGA_B),
+	.VGA_VS(VGA_VS),
+	.VGA_HS(VGA_HS),
+	.VGA_DE(vga_de_mix)
+);
+
+video_freak video_freak
+(
+	.CLK_VIDEO(clk_vid),
+	.CE_PIXEL(CE_PIXEL),
+	.VGA_VS(VGA_VS),
+	.HDMI_WIDTH(HDMI_WIDTH),
+	.HDMI_HEIGHT(HDMI_HEIGHT),
+	.VGA_DE(VGA_DE),
+	.VIDEO_ARX(VIDEO_ARX),
+	.VIDEO_ARY(VIDEO_ARY),
+	.VGA_DE_IN(vga_de_mix),
+	.ARX((!ar) ? 12'd3982 : (ar - 1'd1)),
+	.ARY((!ar) ? 12'd3070 : 12'd0),
+	.CROP_SIZE(vcrop_en ? 12'd216 : 12'd0),
+	.CROP_OFF(5'd4),
+	.SCALE({1'b0, status[9:8]})
+);
 
 assign LED_USER = 0;
 
-wire [2:0] hcnt;
 
 /******************************************************************************************/
 /******************************************************************************************/
@@ -240,6 +334,8 @@ laser500 laser500 (
 	.video_g( video_g  ),
 	.video_b( video_b  ),
 	.non_visible_area(non_visible_area),
+	.hblank(hblank),
+	.vblank(vblank),
 
 	.alt_font(st_alt_font),
 
@@ -261,7 +357,7 @@ laser500 laser500 (
 
 	// floppy interface: fitted while a disk image is mounted (the ROM boots
 	// from it at reset; with no disk it would wait for one forever)
-	.fdc_enable   ( |fdc_mounted  ),
+	.fdc_enable   ( fdc_enable    ),
 	.fdc_active   ( fdc_active    ),
 	.fdc_mounted  ( fdc_mounted   ),
 	.img_mounted  ( img_mounted   ),

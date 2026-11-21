@@ -13,6 +13,8 @@ module laser500 (
 	output wire [5:0] video_g,
 	output wire [5:0] video_b,
 	output wire non_visible_area,
+	output wire hblank,
+	output wire vblank,
 
 	input wire  alt_font,
 	
@@ -75,7 +77,7 @@ wire        cpu_iorq_n;
 
 T80pa cpu
 (
-	.reset_n ( ~CPU_RESET    ),  
+	.reset_n ( ~SYS_RESET    ),  
 	
 	.clk     ( F14M          ),   
 	.cen_p   ( CPUENA        ),   // CPU enable (positive edge)
@@ -131,7 +133,8 @@ tv80s cpu
 // One-clock strobe for each new ps2_key event (bit 10 toggles per event).
 // keyboard.v applies the key while valid is high, so it must be a pulse.
 wire [ 6:0] KD;
-wire        reset_key;   // keyboard reset key (not wired to the CPU yet)
+wire        reset_key;   // keyboard Reset key (Pause/Num Lock), see SYS_RESET
+wire        SYS_RESET;
 reg old_state;
 reg key_strobe;
 
@@ -187,6 +190,7 @@ VTL_chip VTL_chip
 	.F14M   ( F14M        ),
 	.F14Mx2	( F14Mx2	  ),
 	.RESET  ( CPU_RESET   ),
+	.KEY_RESET ( reset_key ),
 	.BLANK  ( BLANK       ),		
 	
 	 // cpu
@@ -208,6 +212,8 @@ VTL_chip VTL_chip
 	.b      ( video_b     ),
 
 	.non_visible_area(non_visible_area),
+	.hblank(hblank),
+	.vblank(vblank),
 	
 	//	SDRAM interface
 	.sdram_addr   ( vdc_sdram_addr   ), 
@@ -385,6 +391,9 @@ always @(*) begin
 end
 
 wire CPU_RESET = ~boot_completed | is_downloading | eraser_busy | reset;
+// the keyboard's Reset key drives the Z80 /RES line (and bank 0 back to the
+// ROM) only: RAM and video keep running and the ROM does a warm start
+assign SYS_RESET = CPU_RESET | reset_key;
 wire BLANK     = ~boot_completed | is_downloading | eraser_busy;
 
 /******************************************************************************************/
