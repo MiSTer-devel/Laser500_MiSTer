@@ -61,3 +61,5 @@ refs/
 software/
 verilator/*.vcd
 *.stp
+verilator/obj_hl/
+verilator/out/

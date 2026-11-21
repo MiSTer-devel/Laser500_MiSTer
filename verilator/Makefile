@@ -1,92 +1,28 @@
+# Laser 500 Verilator simulation (headless, scriptable).
 #
+#   make            -> obj_hl/Vtop      (run from verilator/, ./obj_hl/Vtop --help)
+#   make clean
 #
-#
+# CPU: t80sv_all.sv, the SystemVerilog T80 (cycle-identical to the VHDL
+# rtl/T80 used for synthesis), through the T80pa shim in sim.v.
+# The old ImGui front end (sim_main.cpp, sim/) is not built: it predates the
+# current rtl/laser500.sv ports.
 
-V = verilator
-#V = /usr/local/bin/verilator
-#V = /usr/local/src/verilator-3.876/bin/verilator
-COSIM = n
+HL_DIR  = obj_hl
+HL_RTL  = sim.v t80sv_all.sv ../rtl/laser500.sv ../rtl/downloader.sv ../rtl/dpram.sv \
+          ../rtl/VTL_chip.sv ../rtl/eraser.v ../rtl/keyboard.v ../rtl/laser500_floppy.sv
+HL_EXE  = $(HL_DIR)/Vtop
 
-TOP = --top-module top
-RTL = ../rtl
-V_INC = +incdir+$(RTL) 
+all: $(HL_EXE)
 
-V_DEFINE = +define+debug=1 +define+SIMULATION=1   -CFLAGS "-I../sim/imgui -I../sim/vinc -I../sim/ -O3" 
-#V_DEFINE += --converge-limit 2000 -Wno-WIDTH -Wno-IMPLICIT -Wno-MODDUP -Wno-UNSIGNED -Wno-CASEINCOMPLETE -Wno-CASEX -Wno-SYMRSVDWORD -Wno-COMBDLY -Wno-INITIALDLY -Wno-BLKANDNBLK -Wno-UNOPTFLAT -Wno-SELRANGE -Wno-CMPCONST -Wno-CASEOVERLAP -Wno-PINMISSING -Wno-MULTIDRIVEN
-#V_DEFINE += --threads 8  # this slows it way down
-V_DEFINE += 
-
-UNAME_S := $(shell uname -s)
-
-ifeq ($(UNAME_S), Darwin) #APPLE
-	ECHO_MESSAGE = "Mac OS X"
-	LIBS += -framework OpenGL -framework Cocoa -framework IOKit -framework CoreVideo `sdl2-config --libs`
-	LIBS += -L/usr/local/lib -L/opt/local/lib
-
-	CXXFLAGS += `sdl2-config --cflags` -Iimgui
-	CXXFLAGS += -I/usr/local/include -I/opt/local/include 
-	CFLAGS = $(CXXFLAGS) -Iimgui
-endif
-
-ifeq ($(UNAME_S), Linux) #LINUX
-	ECHO_MESSAGE = "Linux"
-	LIBS += -lGL -ldl `sdl2-config --libs`
-
-	CXXFLAGS += `sdl2-config --cflags` -Iimgui
-	CFLAGS = $(CXXFLAGS)
-endif
-
-ifeq ($(findstring MINGW,$(UNAME_S)),MINGW)
-	ECHO_MESSAGE = "MinGW"
-	LIBS += -lgdi32 -lopengl32 -limm32 `pkg-config --static --libs sdl2`
-
-	CXXFLAGS += `pkg-config --cflags sdl2`
-	CFLAGS = $(CXXFLAGS)
-endif
-
-CFLAGS += $(CC_OPT) $(CC_DEFINE) -Iimgui
-LDFLAGS = $(LIBS)
-EXE = ./obj_dir/Vtop
-V_OPT = -O3 --x-assign fast --x-initial fast --noassert 
-CC_OPT = -O
-#V_OPT = 
-#CC_OPT =   
-
-V_SRC = \
-    sim.v \
-    $(RTL)/laser500.sv \
-    $(RTL)/downloader.sv \
-    $(RTL)/eraser.v \
-    $(RTL)/rom_charset.v \
-    $(RTL)/sdram.v \
-	$(RTL)/VTL_chip.sv \
-    $(RTL)/tv80/tv80_alu.v \
-    $(RTL)/tv80/tv80_core.v \
-    $(RTL)/tv80/tv80_mcode.v \
-    $(RTL)/tv80/tv80_reg.v \
-    $(RTL)/tv80/tv80s.v \                                    
-    $(RTL)/rom_charset.v \  
-    $(RTL)/rom_charset_alternate.v \ 
-    $(RTL)/dpram.sv 
-
-
-C_SRC = \
-	sim_main.cpp  \
-sim/sim_bus.cpp		sim/sim_clock.cpp	sim/sim_console.cpp	sim/sim_video.cpp sim/sim_input.cpp \
- sim/imgui/imgui_impl_sdl.cpp sim/imgui/imgui_impl_opengl2.cpp sim/imgui/imgui_draw.cpp sim/imgui/imgui_widgets.cpp sim/imgui/imgui_tables.cpp sim/imgui/imgui.cpp
-VOUT = obj_dir/Vtop.cpp
-
-all: $(EXE)
-
-$(VOUT): $(V_SRC)  Makefile
-	$V -cc $(V_OPT) -LDFLAGS "$(LDFLAGS) " -exe --trace --savable --Mdir ./obj_dir $(V_DEFINE) $(V_INC) $(TOP) -CFLAGS $(CFLAGS) $(V_SRC) $(C_SRC)
-
-$(EXE): $(VOUT) $(C_SRC)
-#	(cd obj_dir; make OPT="-fauto-inc-dec -fdce -fdefer-pop -fdse -ftree-ccp -ftree-ch -ftree-fre -ftree-dce -ftree-dse" -f Vtop.mk)
-	(cd obj_dir; make -f Vtop.mk)
-
-fast:
-	(cd obj_dir; rm -f *.o ; make OPT="-fcompare-elim -fcprop-registers -fguess-branch-probability -fauto-inc-dec -fif-conversion2 -fif-conversion -fipa-pure-const -fdce -fipa-profile -fipa-reference -fmerge-constants -fsplit-wide-types -fdefer-pop -fdse -ftree-ccp -ftree-ch -ftree-fre -ftree-dce -ftree-dse -ftree-builtin-call-dce -ftree-copyrename -ftree-dominator-opts -ftree-forwprop -ftree-phiprop -ftree-sra -ftree-pta -ftree-ter -funit-at-a-time -ftree-bit-ccp -falign-functions  -falign-jumps -falign-loops  -falign-labels -fcaller-saves -fcrossjumping -fcse-follow-jumps -fcse-skip-blocks -fdelete-null-pointer-checks -fdevirtualize -fexpensive-optimizations -fgcse  -fgcse-lm -finline-small-functions -findirect-inlining -fipa-sra -foptimize-sibling-calls -fpartial-inlining -fpeephole2 -fregmove -freorder-blocks  -freorder-functions -frerun-cse-after-loop -fsched-interblock  -fsched-spec -fschedule-insns -fschedule-insns2 -fstrict-aliasing -fstrict-overflow -ftree-switch-conversion -ftree-pre -ftree-vrp" -f Vtop.mk)
+$(HL_EXE): $(HL_RTL) sim_headless.cpp Makefile
+	verilator --cc --exe --build -j 0 -O3 --x-assign fast --x-initial fast --noassert \
+	  -Wno-fatal -Wno-WIDTH -Wno-PINMISSING -Wno-CASEINCOMPLETE -Wno-UNOPTFLAT -Wno-EOFNEWLINE \
+	  --public-flat-rw +define+SIMULATION=1 --top-module top --Mdir $(HL_DIR) \
+	  -CFLAGS "-O2 -std=c++17" -LDFLAGS "-lz" \
+	  $(HL_RTL) sim_headless.cpp
 
 clean:
-	rm -f obj_dir/*
+	rm -rf $(HL_DIR)
+
+.PHONY: all clean
