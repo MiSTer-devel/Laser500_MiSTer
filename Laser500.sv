@@ -57,8 +57,11 @@ wire        reset;
 // P2 Video, "Changes pending" and Apply and reset. Settings are taken from
 // the OSD at every reset (cfg).
 // status bits: 0 Apply and reset; 2 Character set; 6 Disk interface;
-// 9:8 Scale; 10 Vertical crop; 13:11 Scandoubler Fx; 122:121 Aspect ratio
-// (the video rows act at once: status, not cfg, and not in pending).
+// 9:8 Scale; 10 Vertical crop; 13:11 Scandoubler Fx; 14 Tape speed;
+// 15 Tape overlay; 16 Tape audio; 17 Rewind tape; 18 Tape deck;
+// 20:19 Tape pitch;
+// 122:121 Aspect ratio. The video, audio and tape rows act at once
+// (status, not cfg, and not in pending; tape standard rules 1-2).
 localparam CONF_STR = {
 	"LASER500;;",
 	"-;",
@@ -66,16 +69,22 @@ localparam CONF_STR = {
 	"h1-;",
 	"H1S1,NICDSK,Disk 2;",
 	"h1-;",
+	"S2,WAVCAS,Tape;",
 	"F1,PRGBIN,Load Program;",
 	"F0,ROM,Load ROM;",
 	"-;",
 	"P1,Machine;",
 	"P2,Video;",
+	"P4,Audio;",
+	"P5,Advanced;",
 	"-;",
 	"h0-,Changes pending;",
 	"R[0],Apply and reset;",
 
 	"P1O[6],Disk interface,Auto,Off;",
+	"P1O[14],Tape speed,2x,Normal;",
+	"P1-;",
+	"P1R[17],Rewind tape;",
 
 	"P2O[2],Character set,Standard,Alternate;",
 	"P2-;",
@@ -83,6 +92,14 @@ localparam CONF_STR = {
 	"P2O[9:8],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
 	"P2O[10],Vertical crop,Off,216p(5x);",
 	"P2O[13:11],Scandoubler Fx,None,HQ2x,CRT 25%,CRT 50%,CRT 75%;",
+	"P2O[15],Tape overlay,On,Off;",
+
+	"P4O[16],Tape audio,Off,On;",
+
+	"P5O[18],Tape deck,Auto,Play;",
+	"P5O[20:19],Tape pitch,Normal,+1.6%,-1.6%;",
+
+	"I,Tape ready (rewound),Tape format not supported;",
 
 	"v,1;",
 	"V,v",`BUILD_DATE
@@ -107,20 +124,32 @@ wire st_alt_font = cfg[2];
 wire pending = {status[2], status[6]} != {cfg[2], cfg[6]};
 wire fdc_off = status[6];          // hide the disk rows as soon as it is chosen
 
-// floppy (S0/S1)
-wire  [1:0] img_mounted;
+// floppy (S0/S1), tape (S2)
+wire  [2:0] img_mounted;
 wire        img_readonly;
 wire [63:0] img_size;
 wire [31:0] sd_lba;
 wire  [5:0] sd_blk_cnt;
-wire  [1:0] sd_rd, sd_wr, sd_ack;
+wire  [2:0] sd_ack;
+wire  [1:0] sd_rd, sd_wr;
+wire [31:0] tape_sd_lba;
+wire        tape_sd_rd;
+wire        tape_ready, tape_bad;
+// OSD info message (CONF_STR "I,"): 1 Tape ready (rewound), 2 not supported
+reg   [7:0] info = 0;
+reg         info_req = 0;
+always @(posedge clk_sys) begin
+	info_req <= 0;
+	if (tape_ready) begin info <= 8'd1; info_req <= 1; end
+	if (tape_bad)   begin info <= 8'd2; info_req <= 1; end
+end
 wire [13:0] sd_buff_addr;
 wire  [7:0] sd_buff_dout, sd_buff_din;
 wire        sd_buff_wr;
 wire        fdc_active;
 wire  [1:0] fdc_mounted;
 
-hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
+hps_io #(.CONF_STR(CONF_STR), .VDNUM(3)) hps_io
 (
 	.clk_sys(clk_sys),
 	.HPS_BUS(HPS_BUS),
@@ -144,17 +173,21 @@ hps_io #(.CONF_STR(CONF_STR), .VDNUM(2)) hps_io
 	
 	.ps2_key(ps2_key),
 
+	.info_req(info_req),
+	.info(info),
+
 	.img_mounted(img_mounted),
 	.img_readonly(img_readonly),
 	.img_size(img_size),
-	.sd_lba('{sd_lba, sd_lba}),
-	.sd_blk_cnt('{sd_blk_cnt, sd_blk_cnt}),
-	.sd_rd(sd_rd),
-	.sd_wr(sd_wr),
+	// unpacked [VDNUM] arrays: '{} lists drive 0 first
+	.sd_lba('{sd_lba, sd_lba, tape_sd_lba}),
+	.sd_blk_cnt('{sd_blk_cnt, sd_blk_cnt, 6'd0}),
+	.sd_rd({tape_sd_rd, sd_rd}),
+	.sd_wr({1'b0, sd_wr}),
 	.sd_ack(sd_ack),
 	.sd_buff_addr(sd_buff_addr),
 	.sd_buff_dout(sd_buff_dout),
-	.sd_buff_din('{sd_buff_din, sd_buff_din}),
+	.sd_buff_din('{sd_buff_din, sd_buff_din, 8'hFF}),
 	.sd_buff_wr(sd_buff_wr)
 );
 
@@ -235,6 +268,37 @@ assign VGA_SL = sl[1:0];
 wire vcrop_en = status[10] && HDMI_WIDTH == 1920 && HDMI_HEIGHT == 1080
                 && !forced_scandoubler && sfx == 3'd0;
 
+// tape status bar and hints over the picture (rtl/tape_overlay.sv)
+wire        tape_loaded, tape_playing, tape_fast, tape_at_start, tape_need_run;
+wire [31:0] tape_pos, tape_len;
+wire [17:0] tape_hz;
+wire        ov_hs, ov_vs, ov_hblank, ov_vblank;
+wire  [5:0] ov_r, ov_g, ov_b;
+
+tape_overlay tape_overlay
+(
+	.clk(clk_sys),
+	.reset(reset),
+	.tape_en(~status[15]),
+	.vcrop(vcrop_en),
+	.tape_loaded(tape_loaded),
+	.tape_playing(tape_playing),
+	.tape_fast(tape_fast),
+	.tape_at_start(tape_at_start),
+	.tape_pos(tape_pos),
+	.tape_len(tape_len),
+	.tape_hz(tape_hz),
+	.tape_ready(tape_ready),
+	.need_run(tape_need_run),
+	.ps2_key(ps2_key),
+	.hblank(hblank), .vblank(vblank), .hs(video_hs), .vs(video_vs),
+	.r_in(video_r), .g_in(video_g), .b_in(video_b),
+	.hblank_o(ov_hblank), .vblank_o(ov_vblank), .hs_o(ov_hs), .vs_o(ov_vs),
+	.r_out(ov_r), .g_out(ov_g), .b_out(ov_b),
+	.show_bar(),
+	.show_tape()
+);
+
 wire vga_de_mix;
 
 video_mixer #(.LINE_LENGTH(800), .GAMMA(1)) video_mixer
@@ -245,13 +309,13 @@ video_mixer #(.LINE_LENGTH(800), .GAMMA(1)) video_mixer
 	.scandoubler(scandoubler),
 	.hq2x(sfx == 3'd1),
 	.gamma_bus(gamma_bus),
-	.R({video_r, video_r[5:4]}),
-	.G({video_g, video_g[5:4]}),
-	.B({video_b, video_b[5:4]}),
-	.HSync(~video_hs),                       // VTL syncs are active low: positive here
-	.VSync(~video_vs),
-	.HBlank(hblank),
-	.VBlank(vblank),
+	.R({ov_r, ov_r[5:4]}),
+	.G({ov_g, ov_g[5:4]}),
+	.B({ov_b, ov_b[5:4]}),
+	.HSync(~ov_hs),                          // VTL syncs are active low: positive here
+	.VSync(~ov_vs),
+	.HBlank(ov_hblank),
+	.VBlank(ov_vblank),
 	.HDMI_FREEZE(HDMI_FREEZE),
 	.freeze_sync(),
 	.VGA_R(VGA_R),
@@ -360,18 +424,40 @@ laser500 laser500 (
 	.fdc_enable   ( fdc_enable    ),
 	.fdc_active   ( fdc_active    ),
 	.fdc_mounted  ( fdc_mounted   ),
-	.img_mounted  ( img_mounted   ),
+	.img_mounted  ( img_mounted[1:0] ),
 	.img_readonly ( img_readonly  ),
 	.img_size     ( img_size      ),
 	.sd_lba       ( sd_lba        ),
 	.sd_blk_cnt   ( sd_blk_cnt    ),
 	.sd_rd        ( sd_rd         ),
 	.sd_wr        ( sd_wr         ),
-	.sd_ack       ( sd_ack        ),
+	.sd_ack       ( sd_ack[1:0]   ),
 	.sd_buff_addr ( sd_buff_addr  ),
 	.sd_buff_dout ( sd_buff_dout  ),
 	.sd_buff_din  ( sd_buff_din   ),
-	.sd_buff_wr   ( sd_buff_wr    )
+	.sd_buff_wr   ( sd_buff_wr    ),
+
+	// tape (S2): the tape rows act at once (status, not cfg)
+	.tape_mounted   ( img_mounted[2] ),
+	.tape_sd_lba    ( tape_sd_lba    ),
+	.tape_sd_rd     ( tape_sd_rd     ),
+	.tape_sd_ack    ( sd_ack[2]      ),
+	.tape_rewind    ( status[17]     ),
+	.tape_turbo_en  ( ~status[14]    ),
+	.tape_deck_play ( status[18]     ),
+	.tape_audio_en  ( status[16]     ),
+	.tape_pitch     ( status[20:19]  ),
+	.tape_ready     ( tape_ready     ),
+	.tape_bad       ( tape_bad       ),
+	.tape_loaded    ( tape_loaded    ),
+	.tape_playing   ( tape_playing   ),
+	.tape_fast      ( tape_fast      ),
+	.tape_at_start  ( tape_at_start  ),
+	.tape_pos       ( tape_pos       ),
+	.tape_len       ( tape_len       ),
+	.tape_hz        ( tape_hz        ),
+	.tape_need_run ( tape_need_run ),
+	.tape_underflows ( )
 );
 
 /******************************************************************************************/

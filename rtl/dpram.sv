@@ -48,20 +48,22 @@ initial begin
 	if (init_file>0) $readmemh(init_file, mem);
 end
 
-// Port A
+// Port A (Quartus true dual-port template: new data on read-during-write)
 always @(posedge clock_a) begin
-	q_a <= mem[address_a];
     if(wren_a) begin
         mem[address_a] <= data_a;
+        q_a <= data_a;
     end
+    else q_a <= mem[address_a];
 end
 
 // Port B
 always @(posedge clock_b) begin
-	q_b <= mem[address_b];         
     if(wren_b) begin
         mem[address_b] <= data_b;
+        q_b <= data_b;
     end
+    else q_b <= mem[address_b];
 end
 
 endmodule

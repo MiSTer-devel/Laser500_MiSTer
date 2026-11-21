@@ -11,7 +11,9 @@ module VTL_chip
 		
 	// cpu interface
    output           CPUCK,       // CPU clock to CPU (F14M / 4) - (not used on the MiST, we use F14M & CPUENA)
-	output reg       CPUENA,      // CPU enabled signal
+	output           CPUENA,      // CPU enabled signal
+	input            TURBO,       // CPU at 2x (tape turbo): the same bus cycle on a 2-clock beat
+	output     [3:0] cpu_bank,    // bank selected by A (ROM pages 0-1)
 	output           WAIT_n,      // WAIT (TODO handle wait states)
 	input            MREQ_n,      // MEMORY REQUEST (not used--yet) indicates the bus holds a valid memory address
 	input            IORQ_n,      // IO REQUEST 0=read from I/O
@@ -34,6 +36,12 @@ module VTL_chip
    output reg  [7:0] sdram_din,  // sdram data input
 	output reg        sdram_wr,   // sdram write
 	output reg        sdram_rd,   // sdram read	
+
+	// CPU memory port (its own RAM port, so the 2x CPU never meets a video fetch)
+	output reg [17:0] cpu_ram_addr,
+	output reg  [7:0] cpu_ram_din,
+	output reg        cpu_ram_wr,
+	input       [7:0] cpu_ram_dout,
 	
 	// output to CRT screen
 	output hsync,
@@ -229,6 +237,29 @@ assign WAIT_n = ~WAIT;
 reg MREQ_old;
 reg skip_beat;
 
+// Tape turbo (TURBO): the bus cycle below runs on a 2-clock beat instead of
+// a 4-clock one, so the CPU does exactly twice the T-states, wait beats
+// included (T80pa needs a cen_p and a cen_n edge per T-state, so 2x is the
+// most F14M allows). Normal beat, by CPU_cnt: 3 sample MREQ (a memory cycle
+// starting costs one beat, skip_beat), 0 CPUENA, 1 address/write (the CPU's
+// cen_p edge), 2 data/I/O (its cen_n edge). Turbo beat: every odd hcnt edge
+// samples MREQ, gives cen_p (combinational, unless a memory cycle starts)
+// and sets the address; every even edge takes the data. The mode changes
+// only after a CPU_cnt == 2 edge, where both beats end.
+// MREQ is sampled once per beat, so the refresh cycle, which follows the
+// opcode fetch with MREQ high for one clock only, costs no wait: one wait per
+// memory access, as laser500emu (bus_ops) counts them.
+reg  turbo_on = 0;
+reg  skip_r;                       // turbo: the beat being finished was skipped
+reg  CPUENA_n;                     // normal beat CPUENA
+wire skip_t   = MREQ && !MREQ_old; // turbo: a memory cycle starts, skip this beat
+wire cen_t    = turbo_on && !BLANK && hcnt[0] && !skip_t;
+assign CPUENA = turbo_on ? cen_t : CPUENA_n;
+wire st_addr  = turbo_on ? hcnt[0]  : CPU_cnt == 1;
+wire st_data  = turbo_on ? !hcnt[0] : CPU_cnt == 2;
+wire gate_a   = turbo_on ? skip_t   : skip_beat;    // no write in a skipped beat
+wire gate_d   = turbo_on ? skip_r   : skip_beat;    // no data in a skipped beat
+
 always@(posedge F14M) begin
 	if(RESET) begin
 		hcnt <= 0;  
@@ -239,6 +270,8 @@ always@(posedge F14M) begin
 		
 		fdc_rd <= 0;
 		fdc_wr <= 0;
+		sdram_wr <= 0;      // video only reads port A (the CPU has its own port)
+		sdram_din <= 0;
 		if (!IORQ) io_seen <= 0;
 		if (KEY_RESET) banks[0] <= 0;
 
@@ -270,66 +303,50 @@ always@(posedge F14M) begin
 			else if(VDC_cnt == 5) begin                                                  end 	// 
 			else if(VDC_cnt == 6) begin                                                  end 	// 
 			
-			// === CPU cyles ===
-			// CPU_cnt == 3    nothing
-			// CPU_cnt == 0    CPU does 1 cycle
-			// CPU_cnt == 1    RAM is read or written according to MREQ, RD and WR
-			// CPU_cnt == 2    CPU samples bus / turns off write
-										
-			// detect MREQ state changes
-			if(CPU_cnt == 3) begin
+			// === CPU cycles (see TURBO above) ===
+			if(turbo_on ? hcnt[0] : CPU_cnt == 3) begin
 				MREQ_old <= MREQ;
-				if(MREQ_old == 0 && MREQ == 1) begin
-					skip_beat <= 1;					
-				end
-				else skip_beat <= 0;
+				skip_beat <= MREQ_old == 0 && MREQ == 1;
+				skip_r <= skip_t;
 			end
-			
-			// CPU does one cycle
-			if(CPU_cnt == 0) begin			
-				CPUENA <= !skip_beat;			
-			end			
-			else
-				CPUENA <= 0;
-			
-			// RAM is read or written	
-			if(CPU_cnt == 1) begin
-				sdram_rd <= 1; 
-				sdram_addr <= cpuReadAddress;
-				if(MREQ && WR && !skip_beat)	begin				
-					if(mapped_io) begin											
+			if(CPU_cnt == 2) turbo_on <= TURBO;
+
+			// CPU does one cycle (normal beat)
+			if(CPU_cnt == 0) CPUENA_n <= !skip_beat;
+			else             CPUENA_n <= 0;
+
+			// RAM is read or written
+			if(st_addr) begin
+				cpu_ram_addr <= cpuReadAddress[17:0];
+				if(MREQ && WR && !gate_a)	begin
+					if(mapped_io) begin
 						caps_lock_bit            <= DO[6];
 						vdc_graphic_mode_enabled <= DO[3];
-						CASOUT                   <= DO[2];					
+						CASOUT                   <= DO[2];
 						BUZZER                   <= DO[0];
 					end
 					else begin
-						sdram_wr <= bank_is_ram;
-						sdram_din <= DO;  						
-					end		   
+						cpu_ram_wr  <= bank_is_ram;
+						cpu_ram_din <= DO;
+					end
 				end
 			end
 
-			// CPU samples bus, written is stopped	
-			if(CPU_cnt == 2) begin
-				if(MREQ && !skip_beat) begin
-					if(RD) begin					
-						if(mapped_io) begin											
-							DI[7] <= CASIN;					
-							DI[6:0] <= KD;						      
-						end				
-						else 
-							DI <= sdram_dout; // read from RAM/ROM						
-					end			
-					if(WR)	begin
-						// terminate write
-						sdram_wr <= 0;  
-					end					
+			// CPU samples bus, write is stopped
+			if(st_data) begin
+				cpu_ram_wr <= 0;
+				if(MREQ && !gate_d && RD) begin
+					if(mapped_io) begin
+						DI[7] <= CASIN;
+						DI[6:0] <= KD;
+					end
+					else
+						DI <= cpu_ram_dout; // read from RAM/ROM
 				end
 			end
-					
+
 			// Z80 IO 
-			if(CPU_cnt == 2 && IORQ && !skip_beat) begin
+			if(st_data && IORQ && !gate_d) begin
 				io_seen <= 1;
 				if(fdc_port) begin
 					// floppy: read data and side effects once per I/O cycle
@@ -697,6 +714,7 @@ assign b =
 	wire        mapped_io     = bank == 2 && (base_addr >= 14'h2800 && base_addr <= 14'h2FFF);
 	
 	wire [24:0] videoAddress   = (vdc_page_7 == 1) ? { 7'd0, 4'h7, ramAddress } : { 7'd0, 4'h3, ramAddress };
-	wire [24:0] cpuReadAddress = { 7'd0, bank, base_addr };		
+	wire [24:0] cpuReadAddress = { 7'd0, bank, base_addr };
+	assign cpu_bank = bank;		
 		
 endmodule

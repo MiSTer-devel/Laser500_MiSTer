@@ -44,7 +44,10 @@ static bool fdc_log = false;
 static int fdc_force = -1;          // -1 auto (on when a disk is given), 0 off, 1 on
 static int sd_latency = 3000;       // F14M clocks before sd_ack
 struct DiskOpt { std::string file; int frame; bool ro; std::string save; };
-static DiskOpt disk_opt[2] = {{"",0,false,""},{"",0,false,""}};
+static DiskOpt disk_opt[3] = {{"",0,false,""},{"",0,false,""},{"",0,true,""}};  // 2 = tape
+static int tape_pitch = 0;
+static bool tape_normal = false, tape_play = false, tape_audio = false, tape_no_overlay = false;
+static std::vector<int> rewind_frames;
 struct Ioctl { int frame; int index; std::string file; bool done; };
 static std::vector<Ioctl> ioctls;
 struct KeyText { int frame; std::string text; };
@@ -78,7 +81,16 @@ static void usage() {
 "  --disk1-save F, --disk2-save F   write the image (with the core's writes) at exit\n"
 "  --fdc on|off          floppy interface (default on when a disk is given)\n"
 "  --fdc-log             log floppy port accesses and SD transfers\n"
-"  --sd-latency N        F14M clocks before sd_ack (default 3000)\n"
+"  --sd-latency N        F14M clocks before sd_ack (default 3000; tape a quarter)\n"
+"  --tape F[@FRAME]      mount a .wav/.cas in the tape slot S2 (default frame 0)\n"
+"  --tape-speed normal|2x   OSD Tape speed (default 2x)\n"
+"  --tape-deck auto|play    OSD Tape deck (default auto)\n"
+"  --tape-audio          OSD Tape audio On\n"
+"  --tape-overlay off    OSD Tape overlay Off\n"
+"  --rewind-at-frame N   OSD Rewind tape\n"
+"  --tape-check          compare every played sample with the WAV\n"
+"  --tape-pitch +|-      OSD Tape pitch +1.6% / -1.6%\n"
+"  --m1-trace F1:F2      log opcode fetches (F14M clock, bank:address) and tape port reads in frames F1-F2\n"
 "  --quiet\n");
 }
 
@@ -333,32 +345,33 @@ static void io_tick() {
 
 // ---------------------------------------------------------------- SD (hps_io-like), on F14M
 struct Disk { std::vector<uint8_t> img; bool mounted; };
-static Disk disks[2];
+static Disk disks[3];
 struct SdXfer { int d; bool wr; uint32_t lba; int len; int i; int phase; int wait; };
 static std::unique_ptr<SdXfer> sdx;
-static int mount_pulse[2] = {0, 0};
+
 static uint64_t sd_reads = 0, sd_writes = 0;
 
 static void sd_tick() {
 	top->img_mounted = 0;
-	for (int d = 0; d < 2; d++) {
+	for (int d = 0; d < 3; d++) {
 		if (!disks[d].mounted && !disk_opt[d].file.empty() && frame >= disk_opt[d].frame) {
 			if (!load_file(disk_opt[d].file, disks[d].img)) { fprintf(stderr, "can't read %s\n", disk_opt[d].file.c_str()); exit(2); }
 			disks[d].mounted = true;
 			top->img_size = disks[d].img.size();
 			top->img_readonly = disk_opt[d].ro;
 			top->img_mounted = 1 << d;
-			printf("MOUNT frame %d drive %d %s (%zu bytes%s)\n", frame, d+1, disk_opt[d].file.c_str(), disks[d].img.size(), disk_opt[d].ro ? ", ro" : "");
+			printf(d == 2 ? "MOUNT frame %d tape(%d) %s" : "MOUNT frame %d drive %d %s (%zu bytes%s)\n", frame, d+1, disk_opt[d].file.c_str(), disks[d].img.size(), disk_opt[d].ro ? ", ro" : "");
 			return;
 		}
 	}
 	top->sd_buff_wr = 0;
 	if (!sdx) {
-		for (int d = 0; d < 2; d++) {
-			bool rd = (top->sd_rd >> d) & 1, wr = (top->sd_wr >> d) & 1;
+		for (int d = 0; d < 3; d++) {
+			bool rd = (top->sd_rd >> d) & 1, wr = d < 2 && ((top->sd_wr >> d) & 1);
 			if (rd || wr) {
-				sdx.reset(new SdXfer{d, wr, top->sd_lba, (top->sd_blk_cnt + 1) * 512, 0, 0, sd_latency});
-				if (fdc_log) printf("SD   frame %d drive %d %s lba %u blocks %d\n", frame, d+1, wr ? "write" : "read", sdx->lba, top->sd_blk_cnt + 1);
+				if (d == 2) sdx.reset(new SdXfer{d, false, top->tape_sd_lba, 512, 0, 0, sd_latency / 4});
+				else sdx.reset(new SdXfer{d, wr, top->sd_lba, (top->sd_blk_cnt + 1) * 512, 0, 0, sd_latency});
+				if (fdc_log && d < 2) printf("SD   frame %d drive %d %s lba %u blocks %d\n", frame, d+1, wr ? "write" : "read", sdx->lba, top->sd_blk_cnt + 1);
 				if (wr) sd_writes++; else sd_reads++;
 				break;
 			}
@@ -391,6 +404,65 @@ static void save_disks() {
 		fclose(f);
 		printf("SAVE drive %d %s\n", d+1, disk_opt[d].save.c_str());
 	}
+}
+
+// tape check (--tape-check): every sample the player emits is compared with
+// the level computed here from the image (8/16-bit PCM WAV, first channel)
+static bool tape_check = false;
+static int m1_from = -1, m1_to = -1;     // --m1-trace: opcode fetch addresses in these frames
+static void m1_tick() {
+	static bool seen = false;
+	auto *r = top->rootp;
+	bool m1 = !r->top__DOT__laser500__DOT__cpu_m1_n && !r->top__DOT__laser500__DOT__cpu_mreq_n;
+	if (m1 && !seen) printf("M1 %llu %X:%04X %u\n", (unsigned long long)pix_clocks, r->top__DOT__laser500__DOT__cpu_bank, r->top__DOT__laser500__DOT__cpu_addr, top->tape_pos);
+	seen = m1;
+	// reads of the tape port (mapped I/O, bank 2, 6800h-6FFFh window)
+	static bool rseen = false;
+	bool rd = r->top__DOT__laser500__DOT__cpu_m1_n && !r->top__DOT__laser500__DOT__cpu_mreq_n && !r->top__DOT__laser500__DOT__cpu_rd_n
+	          && r->top__DOT__laser500__DOT__cpu_bank == 2 && (r->top__DOT__laser500__DOT__cpu_addr & 0x3800) == 0x2800;
+	if (rd && !rseen) printf("RD %llu %04X\n", (unsigned long long)pix_clocks, r->top__DOT__laser500__DOT__cpu_addr);
+	rseen = rd;
+}
+static std::vector<uint8_t> tape_expect;
+static uint64_t tape_checked = 0, tape_bad = 0;
+static void tape_expect_load() {
+	std::vector<uint8_t> f;
+	if (!load_file(disk_opt[2].file, f) || f.size() < 44 || memcmp(f.data(), "RIFF", 4)) { tape_check = false; return; }
+	size_t p = 12; int ch = 1, bits = 8;
+	while (p + 8 <= f.size()) {
+		uint32_t ln = f[p+4] | f[p+5] << 8 | f[p+6] << 16 | (uint32_t)f[p+7] << 24;
+		if (!memcmp(&f[p], "fmt ", 4)) { ch = f[p+10] | f[p+11] << 8; bits = f[p+22] | f[p+23] << 8; }
+		if (!memcmp(&f[p], "data", 4)) {
+			int step = ch * bits / 8;
+			for (size_t o = p + 8; o + step <= p + 8 + ln && o + step <= f.size(); o += step)
+				tape_expect.push_back(bits == 16 ? (int16_t)(f[o] | f[o+1] << 8) > 1310 : f[o] > 133);
+			break;
+		}
+		p += 8 + ln + (ln & 1);
+	}
+	printf("TAPECHECK %zu samples\n", tape_expect.size());
+}
+static void tape_check_tick() {
+	static uint32_t last = 0;
+	uint32_t pos = top->tape_pos;
+	if (pos == last) return;
+	if (pos == last + 1 && pos <= tape_expect.size()) {
+		bool lv = top->rootp->top__DOT__laser500__DOT__TAPE_LEVEL;
+		tape_checked++;
+		if (lv != tape_expect[pos - 1] && tape_bad++ < 10)
+			printf("TAPECHECK mismatch frame %d sample %u got %d want %d\n", frame, pos - 1, lv, tape_expect[pos - 1]);
+	}
+	last = pos;
+}
+
+// tape: log changes of the deck (loaded, playing, 2x) and of the overlay
+static void tape_tick() {
+	static int last = -1;
+	int st = top->tape_loaded | top->tape_playing << 1 | top->tape_fast << 2 | top->show_bar << 3 | top->show_tape << 4;
+	if (st == last) return;
+	last = st;
+	printf("TAPE frame %d loaded %d playing %d fast %d bar %d hint %d pos %u/%u\n", frame, top->tape_loaded,
+	       top->tape_playing, top->tape_fast, top->show_bar, top->show_tape, top->tape_pos, top->tape_len);
 }
 
 // floppy port log (decoded strobes inside the core)
@@ -491,6 +563,19 @@ int main(int argc, char **argv) {
 			if (at != std::string::npos) { disk_opt[d].frame = atoi(v.substr(at+1).c_str()); v = v.substr(0, at); }
 			disk_opt[d].file = v;
 		}
+		else if (a == "--tape") {
+			std::string v = next(); size_t at = v.rfind('@');
+			if (at != std::string::npos) { disk_opt[2].frame = atoi(v.substr(at+1).c_str()); v = v.substr(0, at); }
+			disk_opt[2].file = v;
+		}
+		else if (a == "--tape-speed") tape_normal = next() == "normal";
+		else if (a == "--tape-deck") tape_play = next() == "play";
+		else if (a == "--tape-audio") tape_audio = true;
+		else if (a == "--tape-check") tape_check = true;
+		else if (a == "--tape-pitch") { std::string v = next(); tape_pitch = v == "+" ? 1 : v == "-" ? 2 : 0; }
+		else if (a == "--m1-trace") { std::string v = next(); m1_from = atoi(v.c_str()); m1_to = atoi(v.substr(v.find(':')+1).c_str()); }
+		else if (a == "--tape-overlay") tape_no_overlay = next() == "off";
+		else if (a == "--rewind-at-frame") rewind_frames.push_back(atoi(next().c_str()));
 		else if (a == "--disk1-ro") disk_opt[0].ro = true;
 		else if (a == "--disk2-ro") disk_opt[1].ro = true;
 		else if (a == "--disk1-save") disk_opt[0].save = next();
@@ -512,6 +597,9 @@ int main(int argc, char **argv) {
 	top->alt_font = 0;
 	top->fdc_enable = fdc_force >= 0 ? fdc_force : (!disk_opt[0].file.empty() || !disk_opt[1].file.empty());
 	top->sd_ack = 0; top->img_mounted = 0;
+	if (tape_check) tape_expect_load();
+	top->tape_turbo_en = !tape_normal; top->tape_deck_play = tape_play;
+	top->tape_audio_en = tape_audio; top->tape_pitch = tape_pitch; top->tape_overlay_en = !tape_no_overlay; top->tape_rewind = 0;
 	int reset_until = -1;
 
 	int last_frame = -1;
@@ -545,6 +633,9 @@ int main(int argc, char **argv) {
 			if (io_log) io_tick();
 			sd_tick();
 			if (fdc_log) fdc_tick();
+			tape_tick();
+			if (tape_check) tape_check_tick();
+			if (frame >= m1_from && frame <= m1_to) m1_tick();
 		}
 		prev_pix = pix;
 
@@ -554,6 +645,8 @@ int main(int argc, char **argv) {
 			for (auto &j : joys) if (j.frame == frame) { if (j.n) top->joystick_1 = j.v; else top->joystick_0 = j.v; }
 			for (auto &r : reset_frames) if (r.first == frame) { top->reset = 1; reset_until = frame + r.second; printf("RESET frame %d\n", frame); }
 			if (frame == reset_until) top->reset = 0;
+			top->tape_rewind = 0;
+			for (int f : rewind_frames) if (f == frame) { top->tape_rewind = 1; printf("REWIND frame %d\n", frame); }
 			for (auto &d : dumps) if (d.frame == frame) dump_ram(d.file);
 			for (auto &d : track_dumps) if (d.frame == frame) {
 				FILE *f = fopen(d.file.c_str(), "wb");
@@ -580,6 +673,9 @@ int main(int argc, char **argv) {
 		(unsigned long long)frk_de, (unsigned long long)mix_hs_edges, (unsigned long long)mix_vs_edges,
 		(unsigned)top->rootp->top__DOT__frk_arx, (unsigned)top->rootp->top__DOT__frk_ary);
 #endif
+	if (!disk_opt[2].file.empty())
+		printf("TAPE end frame %d pos %u/%u underflows %u\n", frame, top->tape_pos, top->tape_len, top->tape_underflows);
+	if (tape_check) printf("TAPECHECK checked %llu mismatches %llu\n", (unsigned long long)tape_checked, (unsigned long long)tape_bad);
 	printf("DONE frame %d ticks %llu cpu_cycles %llu F14M %llu (cpu = F14M/%.3f)\n", frame, (unsigned long long)ticks, (unsigned long long)cpu_cycles, (unsigned long long)pix_clocks, (double)pix_clocks/cpu_cycles);
 	top->final();
 	delete top;

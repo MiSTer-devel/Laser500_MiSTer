@@ -18,3 +18,5 @@ set_global_assignment -name VHDL_FILE rtl/T80/T80.vhd
 #set_global_assignment -name VERILOG_FILE rtl/tv80/tv80_mcode.v
 #set_global_assignment -name VERILOG_FILE rtl/tv80/tv80_reg.v
 #set_global_assignment -name VERILOG_FILE rtl/tv80/tv80s.v
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/laser500_tape.sv
+set_global_assignment -name SYSTEMVERILOG_FILE rtl/tape_overlay.sv

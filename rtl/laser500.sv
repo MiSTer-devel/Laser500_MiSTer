@@ -49,7 +49,29 @@ module laser500 (
 	input wire  [13:0] sd_buff_addr,
 	input wire   [7:0] sd_buff_dout,
 	output wire  [7:0] sd_buff_din,
-	input wire         sd_buff_wr
+	input wire         sd_buff_wr,
+
+	// tape (hps_io S2, rtl/laser500_tape.sv); img_size and sd_buff_* shared with the floppy
+	input wire        tape_mounted,
+	output wire [31:0] tape_sd_lba,
+	output wire       tape_sd_rd,
+	input wire        tape_sd_ack,
+	input wire        tape_rewind,     // OSD Rewind tape (pulse)
+	input wire        tape_turbo_en,   // OSD Tape speed 2x
+	input wire        tape_deck_play,  // OSD Tape deck: Play
+	input wire        tape_audio_en,   // OSD Tape audio
+	input wire  [1:0] tape_pitch,      // OSD Tape pitch: 0 Normal, 1 +1.6%, 2 -1.6%
+	output wire       tape_ready,      // pulse: mounted/rewound, playable
+	output wire       tape_bad,        // pulse: format not supported
+	output wire       tape_loaded,
+	output wire       tape_playing,
+	output wire       tape_fast,
+	output wire       tape_at_start,
+	output wire [31:0] tape_pos,
+	output wire [31:0] tape_len,
+	output wire [17:0] tape_hz,
+	output wire       tape_need_run, // pulse: Ready after a load that needs RUN
+	output wire [15:0] tape_underflows
 );
 
 /******************************************************************************************/
@@ -180,6 +202,12 @@ keyboard keyboard
 //
 					
 wire [24:0] vdc_sdram_addr; 
+wire [17:0] cpu_ram_addr;
+wire  [7:0] cpu_ram_din, cpu_ram_dout;
+wire        cpu_ram_wr;
+wire  [3:0] cpu_bank;
+wire        CASIN, TAPE_LEVEL;      // cassette input (@audio below)
+wire        BUZZER, CASOUT;
 wire        vdc_sdram_wr;
 wire        vdc_sdram_rd;
 wire  [7:0] vdc_sdram_din;
@@ -196,6 +224,8 @@ VTL_chip VTL_chip
 	 // cpu
     .CPUCK    ( CPUCK         ),
 	.CPUENA   ( CPUENA        ),
+	.TURBO    ( tape_fast     ),
+	.cpu_bank ( cpu_bank      ),
 	.MREQ_n   ( cpu_mreq_n    ),	
 	.IORQ_n   ( cpu_iorq_n    ),
 	.RD_n     ( cpu_rd_n      ), 
@@ -221,6 +251,11 @@ VTL_chip VTL_chip
 	.sdram_rd     ( vdc_sdram_rd     ),
 	.sdram_wr     ( vdc_sdram_wr     ),
 	.sdram_dout   ( sdram_dout       ), 
+
+	.cpu_ram_addr ( cpu_ram_addr     ),
+	.cpu_ram_din  ( cpu_ram_din      ),
+	.cpu_ram_wr   ( cpu_ram_wr       ),
+	.cpu_ram_dout ( cpu_ram_dout     ),
 	
 	.joystick_0   ( joystick_0 ),
 	.joystick_1   ( joystick_1 ),
@@ -401,27 +436,90 @@ wire BLANK     = ~boot_completed | is_downloading | eraser_busy;
 /***************************************** @audio *****************************************/
 /******************************************************************************************/
 /******************************************************************************************/
-// latches cassette input
+// Cassette. CASIN is bit 7 of the mapped I/O read: the tape player. (The
+// emu's UART_RX is the HPS UART's TX, not a cassette line: it is not used.)
+//
+// The Laser has no motor relay: the deck plays while the CPU runs the BASIC
+// ROM's tape-read code, 1714h-19DEh (CLOAD 1714h, CRUN 1958h, VERIFY 1962h,
+// RDBYET 1865h through the block header 19BCh), held for 71 ms after the
+// last fetch there so the ROM's calls out (printing FOUND, bank switching)
+// don't stop it. OSD Tape deck Play keeps it playing whenever a tape is
+// mounted, for programs with their own loaders. While the ROM reads with
+// Tape speed 2x, the CPU (VTL_chip TURBO) and the tape run 2x (tape
+// standard rule 7); never outside the ROM's tape code (rule 6).
+assign      CASIN = TAPE_LEVEL;
 
-reg CASIN;
+wire        tape_rom_pc = !cpu_m1_n && !cpu_mreq_n && cpu_bank == 4'd0 &&
+                          cpu_addr >= 16'h1714 && cpu_addr <= 16'h19DE;
+reg  [19:0] tape_hold = 0;
+always @(posedge F14M)
+	if (tape_rom_pc)          tape_hold <= 20'hFFFFF;
+	else if (tape_hold != 0)  tape_hold <= tape_hold - 20'd1;
+wire        tape_rom  = tape_hold != 0;
+wire        tape_play = tape_rom | tape_deck_play;
+
+// overlay TYPE RUN: the ROM prints Ready (reads the string at 21A8h, from
+// 22E9h, 3717h or 58E5h) after a good load (1766h, checksum passed) that it
+// did not run itself: CLOAD of BASIC, or a machine-code file that returned.
+// z88dk/laser500-wav programs are type F1 loaded at 8995h, the BASIC area: the ROM's jump there (176Dh) passes through RUN's code (27B4h)
+// without starting the program, which needs RUN typed (sim: ROM_CRC.wav).
+// CRUN of BASIC starts it: 1796h jumps to 27B4h, and that clears the flag.
+reg         m1_seen, rd_seen;
+reg         tape_good_load = 0;
+reg  [15:0] last_m1;
+wire        m1_rom = !cpu_m1_n && !cpu_mreq_n && !m1_seen && cpu_bank == 4'd0;
+always @(posedge F14M) if (m1_rom) last_m1 <= cpu_addr;
+wire        rd_ready = cpu_m1_n && !cpu_mreq_n && !cpu_rd_n && !rd_seen &&
+                       cpu_bank == 4'd0 && cpu_addr == 16'h21A8;
 always @(posedge F14M) begin
-	CASIN <= ~UART_RX;
+	m1_seen <= !cpu_m1_n && !cpu_mreq_n;
+	rd_seen <= !cpu_mreq_n && !cpu_rd_n;
+	if (CPU_RESET)                          tape_good_load <= 0;
+	else if (m1_rom && cpu_addr == 16'h1766) tape_good_load <= 1;
+	else if ((m1_rom && cpu_addr == 16'h27B4 && last_m1 == 16'h1796) || rd_ready) tape_good_load <= 0;
 end
+assign tape_need_run = rd_ready && tape_good_load;
 
-wire BUZZER;
-wire CASOUT;
+wire tape_at_end;
+assign tape_playing = tape_play && tape_loaded && !tape_at_end;
 
-//
-// BUZZER for emulating the keyboard builtin speaker
-// CASIN for tape monitor
-// CASOUT for save to tape wire
-// One level on the 16-bit unsigned output (AUDIO_S = 0).
-//
-wire speaker = BUZZER ^ CASIN ^ (~CASOUT);
+laser500_tape tape
+(
+	.clk          ( F14M             ),
+	.img_mounted  ( tape_mounted     ),
+	.img_size     ( img_size         ),
+	.sd_lba       ( tape_sd_lba      ),
+	.sd_rd        ( tape_sd_rd       ),
+	.sd_ack       ( tape_sd_ack      ),
+	.sd_buff_addr ( sd_buff_addr[8:0]),
+	.sd_buff_dout ( sd_buff_dout     ),
+	.sd_buff_wr   ( sd_buff_wr       ),
+	.rewind       ( tape_rewind      ),
+	.play         ( tape_play        ),
+	.turbo_ok     ( tape_turbo_en & tape_rom ),
+	.pitch        ( tape_pitch       ),
+	.level        ( TAPE_LEVEL       ),
+	.loaded       ( tape_loaded      ),
+	.fast         ( tape_fast        ),
+	.at_start     ( tape_at_start    ),
+	.at_end       ( tape_at_end      ),
+	.position     ( tape_pos         ),
+	.length       ( tape_len         ),
+	.hz           ( tape_hz          ),
+	.ready_pulse  ( tape_ready       ),
+	.bad_pulse    ( tape_bad         ),
+	.underflows   ( tape_underflows  )
+);
+
+// Sound: the built-in speaker (latch bit 0), one level on the 16-bit
+// unsigned output (AUDIO_S = 0). OSD Tape audio On mixes the tape input and
+// the cassette output (latch bit 2) in quietly.
+wire [15:0] snd_tin  = tape_audio_en && CASIN  ? 16'h0C00 : 16'h0000;
+wire [15:0] snd_tout = tape_audio_en && CASOUT ? 16'h0C00 : 16'h0000;
 
 always @(posedge F14M) begin
-	AUDIO_L <= speaker ? 16'h4000 : 16'h0000;
-	AUDIO_R <= speaker ? 16'h4000 : 16'h0000;
+	AUDIO_L <= (BUZZER ? 16'h4000 : 16'h0000) + snd_tin + snd_tout;
+	AUDIO_R <= (BUZZER ? 16'h4000 : 16'h0000) + snd_tin + snd_tout;
 end
 
 dpram #(8, 18) dpram
@@ -430,7 +528,14 @@ dpram #(8, 18) dpram
 	.clock_a(F14Mx2),
 	.data_a(sdram_din),
 	.q_a(sdram_dout),
-	.wren_a(sdram_wr)
+	.wren_a(sdram_wr),
+
+	// the CPU (VTL_chip cpu_ram_*)
+	.address_b(cpu_ram_addr),
+	.clock_b(F14Mx2),
+	.data_b(cpu_ram_din),
+	.q_b(cpu_ram_dout),
+	.wren_b(cpu_ram_wr)
 );
 
 endmodule
