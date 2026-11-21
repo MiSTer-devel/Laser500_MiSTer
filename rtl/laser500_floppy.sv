@@ -23,13 +23,15 @@
 //   327680  .nic, 40 tracks x 8192, 1 side       (read/write)
 //   335872  .nic, 41 tracks x 8192, 1 side       (read/write)
 //   655360  .nic, 40 tracks x 8192, 2 sides      (read/write)
-//   163840  .dsk, 40 tracks x 16 x 256, 1 side   (read only for now: mounted
-//           write protected so VT-DOS reports error 4 instead of losing data)
+//   163840  .dsk, 40 tracks x 16 x 256, 1 side   (read/write)
 // A .nic track is 16 SD blocks loaded and stored as is. A .dsk track is 8
 // blocks, nibblized into the buffer in "layout A" (docs/DISK.md 5.2): sector k
 // at k*512: FF x8, D5 AA 96, 4&4 vol trk sec cks, DE AA, FF x8, D5 AA AD,
 // 343 6-and-2 nibbles, DE AA, FF to the end. tools/laser500_disk.py is the
-// reference model.
+// reference model. A dirty .dsk track is denibblized before it is written:
+// every address field of this track with a valid 4&4 checksum and a data
+// field with a valid 6-and-2 checksum replaces its sector; sectors that do
+// not decode keep their old data.
 // A dirty track is written back when the head leaves it and when the motor
 // is switched off.
 //============================================================================
@@ -121,19 +123,21 @@ always @(posedge clk) begin
 	else buf_q_b <= tbuf[b_addr];
 end
 
-// .dsk staging RAM: one track of sectors (4 KB)
-reg  [11:0] s_addr;
+// .dsk staging RAM: one track of sectors (0-4095) and the sector being
+// decoded on write-back (4096-4351)
+reg  [12:0] s_addr;
 reg   [7:0] s_q;
-reg   [7:0] stage [4096];
+reg   [7:0] stage [8192];
 reg         s_we;
-reg  [11:0] s_waddr;
+reg  [12:0] s_waddr;
 reg   [7:0] s_wdata;
 always @(posedge clk) begin
 	if (s_we) stage[s_waddr] <= s_wdata;
 	s_q <= stage[s_addr];
 end
 
-assign sd_buff_din = buf_q_b;
+reg         sd_src_stage;           // .dsk write-back reads the staging RAM
+assign sd_buff_din = sd_src_stage ? s_q : buf_q_b;
 
 // ---------------------------------------------------------------- GCR 6-and-2
 function [7:0] gcr(input [5:0] v);
@@ -164,6 +168,14 @@ function [7:0] enc44(input [7:0] x, input second);
 	enc44 = second ? (x | 8'hAA) : ({1'b0, x[7:1]} | 8'hAA);
 endfunction
 
+// GCR 6-and-2 inverse: {valid, value}
+function [6:0] ginv(input [7:0] n);
+	ginv = 7'd0;
+	for (int v = 0; v < 64; v++) if (gcr(v[5:0]) == n) ginv = {1'b1, v[5:0]};
+endfunction
+
+function [7:0] dec44(input [7:0] a, input [7:0] b); dec44 = {a[6:0], 1'b1} & b; endfunction
+
 // ---------------------------------------------------------------- track buffer state
 reg        tag_ok;                 // buffer holds tag_drv/tag_sd/tag_trk
 reg        tag_drv, tag_sd;
@@ -174,7 +186,8 @@ reg  [1:0] stale;
 wire       want_change = ~tag_ok | (tag_drv != drv) | (tag_sd != cur_sd) | (tag_trk != cur_trk);
 
 localparam ST_IDLE  = 4'd0, ST_FLUSH = 4'd1, ST_FLUSHW = 4'd2, ST_LOAD = 4'd3, ST_LOADW = 4'd4,
-           ST_BLANK = 4'd5, ST_AUX   = 4'd6, ST_EMIT  = 4'd7, ST_FILL = 4'd8;
+           ST_BLANK = 4'd5, ST_AUX   = 4'd6, ST_EMIT  = 4'd7, ST_FILL = 4'd8,
+           ST_DN    = 4'd9, ST_DSKW  = 4'd10;
 reg  [3:0] st = ST_IDLE;
 wire       busy = (st != ST_IDLE);
 
@@ -188,6 +201,29 @@ reg  [5:0] aux [86];
 reg  [5:0] n_prev;
 reg  [5:0] ld_trk;
 reg        ld_drv;
+
+// denibblizer (.dsk write-back)
+localparam DN_SEEK = 3'd0, DN_ADDR = 3'd1, DN_DSEEK = 3'd2, DN_DATA = 3'd3, DN_COPY = 3'd4;
+reg  [13:0] dn_q;         // scan position, runs past 8191 (wraps) to finish a field
+reg   [1:0] dn_ph;
+reg   [2:0] dn_mode;
+reg   [8:0] dn_cnt;
+reg  [23:0] dn_sh;
+reg  [55:0] dn_ab;
+reg   [3:0] dn_sec;
+reg   [5:0] dn_c;
+reg   [6:0] dn_jm;
+reg   [1:0] dn_jd;
+reg   [7:0] dn_i;
+wire  [7:0] dn_b   = buf_q_b;
+wire  [6:0] dn_g   = ginv(dn_b);
+wire  [5:0] dn_nc  = dn_c ^ dn_g[5:0];
+wire  [5:0] dn_aux = aux[dn_jm];
+wire  [1:0] dn_a2  = (dn_jd == 2'd0) ? dn_aux[1:0] : (dn_jd == 2'd1) ? dn_aux[3:2] : dn_aux[5:4];
+wire  [7:0] dn_vol = dec44(dn_ab[55:48], dn_ab[47:40]);
+wire  [7:0] dn_trk = dec44(dn_ab[39:32], dn_ab[31:24]);
+wire  [7:0] dn_sn  = dec44(dn_ab[23:16], dn_ab[15:8]);
+wire  [7:0] dn_cks = dec44(dn_ab[7:0], dn_b);
 
 // fill after a long write burst (format): FF to the end of the 8 KB
 reg [12:0] wr_count;
@@ -261,7 +297,7 @@ always @(posedge clk) begin
 			img_in[d]  <= (img_size == 64'd327680) || (img_size == 64'd335872) ||
 			              (img_size == 64'd655360) || (img_size == 64'd163840);
 			img_dsk[d] <= (img_size == 64'd163840);
-			img_wp[d]  <= img_readonly | (img_size == 64'd163840);
+			img_wp[d]  <= img_readonly;
 			img_41[d]  <= (img_size == 64'd335872);
 			img_2s[d]  <= (img_size == 64'd655360);
 			track_x2[d] <= 7'd0;
@@ -333,7 +369,15 @@ always @(posedge clk) begin
 			if (stale[tag_drv]) begin tag_ok <= 0; dirty <= 0; end
 			stale <= 0;
 		end
-		else if (dirty && (want_change || flush_on_stop) && tag_ok && !img_dsk[tag_drv]) begin
+		else if (dirty && (want_change || flush_on_stop) && tag_ok && img_dsk[tag_drv]) begin
+			// .dsk: decode the nibbles back into sectors first
+			dn_q    <= 0;
+			dn_ph   <= 0;
+			dn_mode <= DN_SEEK;
+			dn_sh   <= 0;
+			st      <= ST_DN;
+		end
+		else if (dirty && (want_change || flush_on_stop) && tag_ok) begin
 			// write the buffer back: 16 blocks
 			sd_lba     <= {21'd0, (tag_sd ? (img_41[tag_drv] ? 7'd41 : 7'd40) : 7'd0) + tag_trk, 4'd0};
 			sd_blk_cnt <= 6'd15;
@@ -390,7 +434,7 @@ always @(posedge clk) begin
 		if (sd_buff_wr & sd_ack[ld_drv]) begin
 			if (img_dsk[ld_drv]) begin
 				s_we    <= 1;
-				s_waddr <= sd_buff_addr[11:0];
+				s_waddr <= {1'b0, sd_buff_addr[11:0]};
 				s_wdata <= sd_buff_dout;
 			end
 			else begin
@@ -437,7 +481,7 @@ always @(posedge clk) begin
 	// .dsk: aux values of sector n_sec (low 2 bits of each byte, bit-swapped)
 	ST_AUX: begin
 		case (n_ph)
-			2'd0: begin s_addr <= {n_sec, n_i[7:0]}; n_ph <= 2'd1; end
+			2'd0: begin s_addr <= {1'b0, n_sec, n_i[7:0]}; n_ph <= 2'd1; end
 			2'd1: n_ph <= 2'd2;
 			default: begin
 				n_ph <= 2'd0;
@@ -461,7 +505,7 @@ always @(posedge clk) begin
 	// .dsk: the 512 bytes of sector block n_sec
 	ST_EMIT: begin
 		case (n_ph)
-			2'd0: begin s_addr <= {n_sec, n_k86}; n_ph <= 2'd1; end
+			2'd0: begin s_addr <= {1'b0, n_sec, n_k86}; n_ph <= 2'd1; end
 			2'd1: n_ph <= 2'd2;
 			default: begin
 				n_ph   <= 2'd0;
@@ -484,6 +528,105 @@ always @(posedge clk) begin
 				else n_i <= n_i + 1'd1;
 			end
 		endcase
+	end
+
+	// .dsk write-back, step 1: scan the track buffer for sectors of this track
+	ST_DN: begin
+		if (dn_mode == DN_COPY) begin
+			// copy the decoded sector (stage 4096+) to its place
+			case (dn_ph)
+				2'd0: begin s_addr <= {5'b10000, dn_i}; dn_ph <= 2'd1; end
+				2'd1: dn_ph <= 2'd2;
+				default: begin
+					dn_ph   <= 2'd0;
+					s_we    <= 1;
+					s_waddr <= {1'b0, dn_sec, dn_i};
+					s_wdata <= s_q;
+					dn_i    <= dn_i + 1'd1;
+					if (dn_i == 8'd255) begin dn_mode <= DN_SEEK; dn_sh <= 0; end
+				end
+			endcase
+		end
+		else if (dn_q >= 14'd8620) begin
+			// step 2: write the 8 blocks of sectors
+			sd_lba     <= {23'd0, tag_trk, 3'd0};
+			sd_blk_cnt <= 6'd7;
+			sd_wr[tag_drv] <= 1;
+			sd_src_stage <= 1;
+			st <= ST_DSKW;
+		end
+		else case (dn_ph)
+			2'd0: begin b_addr <= dn_q[12:0]; dn_ph <= 2'd1; end
+			2'd1: dn_ph <= 2'd2;
+			default: begin
+				dn_ph <= 2'd0;
+				dn_q  <= dn_q + 1'd1;
+				dn_sh <= {dn_sh[15:0], dn_b};
+				case (dn_mode)
+					DN_SEEK:
+						if ({dn_sh[15:0], dn_b} == 24'hD5AA96 && dn_q < 14'd8194) begin
+							dn_mode <= DN_ADDR;
+							dn_cnt  <= 0;
+						end
+					DN_ADDR: begin
+						dn_ab  <= {dn_ab[47:0], dn_b};
+						dn_cnt <= dn_cnt + 1'd1;
+						if (dn_cnt == 9'd7) begin
+							dn_sh <= 0;
+							if (((dn_vol ^ dn_trk ^ dn_sn ^ dn_cks) == 8'd0) && dn_trk == {2'd0, tag_trk} && dn_sn < 8'd16) begin
+								dn_sec  <= dn_sn[3:0];
+								dn_cnt  <= 0;
+								dn_mode <= DN_DSEEK;
+							end
+							else dn_mode <= DN_SEEK;
+						end
+					end
+					DN_DSEEK: begin
+						dn_cnt <= dn_cnt + 1'd1;
+						if ({dn_sh[15:0], dn_b} == 24'hD5AAAD) begin
+							dn_mode <= DN_DATA;
+							dn_cnt  <= 0;
+							dn_c    <= 0;
+							dn_i    <= 0; dn_jm <= 0; dn_jd <= 0;
+						end
+						else if (dn_cnt == 9'd60) dn_mode <= DN_SEEK;
+					end
+					DN_DATA: begin
+						dn_c   <= dn_nc;
+						dn_cnt <= dn_cnt + 1'd1;
+						if (!dn_g[6]) dn_mode <= DN_SEEK;          // not a disk nibble
+						else if (dn_cnt < 9'd86) aux[dn_cnt[6:0]] <= dn_nc;
+						else if (dn_cnt < 9'd342) begin
+							s_we    <= 1;
+							s_waddr <= {5'b10000, dn_i};
+							s_wdata <= {dn_nc, dn_a2[0], dn_a2[1]};
+							dn_i    <= dn_i + 1'd1;
+							if (dn_jm == 7'd85) begin dn_jm <= 0; dn_jd <= dn_jd + 1'd1; end
+							else dn_jm <= dn_jm + 1'd1;
+						end
+						else begin                                 // checksum nibble
+							dn_i    <= 0;
+							dn_ph   <= 0;
+							dn_mode <= (dn_nc == 6'd0) ? DN_COPY : DN_SEEK;
+							dn_sh   <= 0;
+						end
+					end
+					default: dn_mode <= DN_SEEK;
+				endcase
+			end
+		endcase
+	end
+
+	// .dsk write-back, step 3: hps_io reads sd_buff_din (the staging RAM)
+	ST_DSKW: begin
+		s_addr <= {1'b0, sd_buff_addr[11:0]};
+		if (sd_ack[tag_drv]) sd_wr <= 0;
+		if (old_ack[tag_drv] & ~sd_ack[tag_drv]) begin
+			sd_src_stage  <= 0;
+			dirty         <= 0;
+			flush_on_stop <= 0;
+			st <= ST_IDLE;
+		end
 	end
 
 	default: st <= ST_IDLE;
