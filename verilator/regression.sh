@@ -35,9 +35,16 @@ if [ -f "$VTDOS" ]; then
 	run nic_reload 'SHOT 700' --disk1 "$T/w2.nic" --send-keys '230:RUN "TEST"\n' --stop-at-frame 700 --screenshot 700
 	python3 -I ../tools/laser500_disk.py check "$T/w2.nic" | tail -1
 fi
+EMPTY=../software/mister11/4_s0.dsk
+if [ -f "$EMPTY" ]; then
+	cp "$EMPTY" "$T/e.dsk"
+	run dsk_save 'writes 3' --disk1 "$T/e.dsk" --disk1-save "$T/e2.dsk" \
+		--send-keys '230:10 print "dsk write ok"\n' --send-keys '240:save "dskw"\n' --stop-at-frame 900
+	run dsk_reload 'SHOT 700' --disk1 "$T/e2.dsk" --send-keys '230:run "dskw"\n' --stop-at-frame 700 --screenshot 700
+fi
 [ -f "$GAMES" ] && run dsk_tarzan 'read lba 16 blocks 8' --disk1 "$GAMES" --send-keys '230:run "tarzan"\n' \
 	--stop-at-frame 1400 --screenshot 1400 --fdc-log
 
 rm -rf "$T"
-echo "screenshots: $O (nic_reload should say 'saved ok', dsk_tarzan the TARZAN menu)"
+echo "screenshots: $O (nic_reload: 'saved ok', dsk_reload: 'DSK WRITE OK', dsk_tarzan: the TARZAN menu)"
 exit $fail

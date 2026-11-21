@@ -63,3 +63,5 @@ verilator/*.vcd
 *.stp
 verilator/obj_hl/
 verilator/out/
+tools/__pycache__/
+verilator/obj_mix/

@@ -46,9 +46,16 @@ module top
 	input         sd_buff_wr
 );
 
+`ifdef SIM_MIXER
+wire clk_vid = clk_2x;            // the harness clock is 4 x F14M here
+reg  clk2 = 0;
+always @(posedge clk_vid) clk2 <= ~clk2;
+`else
+wire clk2 = clk_2x;
+`endif
 reg F14M = 0;
 reg [1:0] div3 = 0;
-always @(posedge clk_2x) F14M <= ~F14M;
+always @(posedge clk2) F14M <= ~F14M;
 always @(posedge F14M) div3 <= div3 + 1'd1;
 wire F3M = div3[1];
 
@@ -62,10 +69,47 @@ assign VGA_R  = { video_r, video_r[5:4] };
 assign VGA_G  = { video_g, video_g[5:4] };
 assign VGA_B  = { video_b, video_b[5:4] };
 
+`ifdef SIM_MIXER
+`ifndef MIX_HS
+`define MIX_HS ~VGA_HS
+`define MIX_VS ~VGA_VS
+`endif
+// the emu's video path (Laser500.sv), run on clk_2x for a functional check
+wire [5:0] r6 = video_r, g6 = video_g, b6 = video_b;
+wire hblank, vblank;
+reg  pix_tog = 0;
+always @(posedge F14M) pix_tog <= ~pix_tog;
+reg  [1:0] pt;
+reg  ce_mix;
+always @(posedge clk_vid) begin pt <= {pt[0], pix_tog}; ce_mix <= pt[1] ^ pt[0]; end
+wire [21:0] gamma_bus;
+assign gamma_bus[20:0] = 0;
+wire mix_ce, mix_de, mix_hs, mix_vs;
+wire [7:0] mix_r, mix_g, mix_b;
+video_mixer_sim #(.LINE_LENGTH(800), .GAMMA(1)) video_mixer
+(
+	.CLK_VIDEO(clk_vid), .CE_PIXEL(mix_ce), .ce_pix(ce_mix), .scandoubler(1'b0), .hq2x(1'b0),
+	.gamma_bus(gamma_bus),
+	.R({r6, r6[5:4]}), .G({g6, g6[5:4]}), .B({b6, b6[5:4]}),
+	.HSync(`MIX_HS), .VSync(`MIX_VS), .HBlank(hblank), .VBlank(vblank),
+	.HDMI_FREEZE(1'b0), .freeze_sync(),
+	.VGA_R(mix_r), .VGA_G(mix_g), .VGA_B(mix_b), .VGA_VS(mix_vs), .VGA_HS(mix_hs), .VGA_DE(mix_de)
+);
+wire        frk_de;
+wire [12:0] frk_arx, frk_ary;
+video_freak video_freak
+(
+	.CLK_VIDEO(clk_vid), .CE_PIXEL(mix_ce), .VGA_VS(mix_vs),
+	.HDMI_WIDTH(12'd1920), .HDMI_HEIGHT(12'd1080),
+	.VGA_DE(frk_de), .VIDEO_ARX(frk_arx), .VIDEO_ARY(frk_ary), .VGA_DE_IN(mix_de),
+	.ARX(12'd3982), .ARY(12'd3070), .CROP_SIZE(12'd0), .CROP_OFF(5'd4), .SCALE(3'd0)
+);
+`endif
+
 laser500 laser500
 (
 	.F14M(F14M),
-	.F14Mx2(clk_2x),
+	.F14Mx2(clk2),
 	.F3M(F3M),
 	.reset(reset),
 	.pll_locked(1'b1),
@@ -76,6 +120,10 @@ laser500 laser500
 	.video_g(video_g),
 	.video_b(video_b),
 	.non_visible_area(non_visible_area),
+`ifdef SIM_MIXER
+	.hblank(hblank),
+	.vblank(vblank),
+`endif
 
 	.alt_font(alt_font),
 

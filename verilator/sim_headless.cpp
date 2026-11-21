@@ -20,6 +20,10 @@
 static Vtop *top;
 static uint64_t ticks = 0;      // clk_2x half periods
 static uint64_t cpu_cycles = 0, pix_clocks = 0;
+#ifdef SIM_MIXER
+static uint64_t mix_nz = 0, mix_ce = 0, mix_de = 0, frk_de = 0, mix_hs_edges = 0, mix_vs_edges = 0;
+static int last_mhs = 0, last_mvs = 0;
+#endif
 static int frame = 0;
 
 // ---------------------------------------------------------------- options
@@ -60,7 +64,7 @@ static void usage() {
 "  --ioctl FRAME:IDX:F   any download\n"
 "  --stop-at-frame N     (default 200)\n"
 "  --reset-at-frame N    pulse reset\n"
-"  --send-keys FRAME:TEXT  type (PC layout, \\n Enter, \\b BS, \\e Esc)\n"
+"  --send-keys FRAME:TEXT  type (PC layout, \\n Enter, \\b BS, \\e Esc, \\R Reset key)\n"
 "  --key-hold N, --key-gap N   frames (default 6/8)\n"
 "  --joy FRAME:HEX, --joy2 FRAME:HEX\n"
 "  --screenshot N,..  --screenshot-every N  --screenshot-end\n"
@@ -201,6 +205,12 @@ static void schedule_text(int f, const std::string &t) {
 		int c = (unsigned char)t[i];
 		if (c == '\\' && i+1 < t.size()) {
 			char n = t[++i];
+			if (n == 'R') {   // the Laser's Reset key (PS/2 77h)
+				key_q.push_back({f, 0x77, false, true});
+				key_q.push_back({f + key_hold, 0x77, false, false});
+				f += key_hold + key_gap;
+				continue;
+			}
 			c = n=='n' ? '\n' : n=='b' ? '\b' : n=='e' ? 27 : n=='t' ? '\t' : n;
 		}
 		Sc s;
@@ -404,6 +414,27 @@ static void fdc_tick() {
 		printf("FDC  frame %d OUT %02X = %02X\n", frame, 0x10 | (r->top__DOT__laser500__DOT__cpu_addr & 3), r->top__DOT__laser500__DOT__cpu_dout);
 }
 
+#ifdef SIM_MIXER
+// mixer output capture: lines on HS rising edge, frames on VS rising edge,
+// pixels while DE (any polarity is fine: edges of the raw signal)
+static std::vector<uint32_t> mfb(1024*640), mlast(1024*640);
+static int mx = 0, my = 0, mw = 0, mh = 0, mlw = 0, mlh = 0, mframe = 0, pmhs = 0, pmvs = 0, mde_lines = 0, mlast_de_lines = 0;
+static bool mline_de = false;
+static void mix_pixel(int hs, int vs, int de, int r, int g, int b) {
+	if (hs && !pmhs) { if (mx > mw) mw = mx; if (mline_de) mde_lines++; mline_de = false; mx = 0; my++; }
+	if (vs && !pmvs) { mlast.swap(mfb); mlw = mw; mlh = my; mlast_de_lines = mde_lines; mde_lines = 0; mw = 0; my = 0; mframe++; std::fill(mfb.begin(), mfb.end(), 0); }
+	pmhs = hs; pmvs = vs;
+	if (de) { mline_de = true; if (mx < 1024 && my < 640) mfb[my*1024 + mx] = (r<<16)|(g<<8)|b; mx++; }
+}
+static void save_mix_shot(int n) {
+	char fn[512];
+	snprintf(fn, sizeof fn, "%s/%s_mix_%04d.png", shot_dir.c_str(), shot_prefix.c_str(), n);
+	int w = mlw ? (mlw < 1024 ? mlw : 1024) : 1, h = mlh ? (mlh < 640 ? mlh : 640) : 1;
+	write_png(fn, w, h, mlast, 1024, 0, 0);
+	printf("MIXSHOT %d %s %dx%d lines_with_de %d\n", n, fn, w, h, mlast_de_lines);
+}
+#endif
+
 // ---------------------------------------------------------------- main
 static std::vector<int> parse_list(const char *s) {
 	std::vector<int> v;
@@ -491,6 +522,19 @@ int main(int argc, char **argv) {
 		ticks++;
 		if (ticks == 20) top->reset = 0;
 
+#ifdef SIM_MIXER
+		if (top->clk_2x) {
+			auto *r = top->rootp;
+			if (r->top__DOT__mix_ce) {
+				mix_ce++;
+				if (r->top__DOT__mix_de) mix_de++;
+				if (r->top__DOT__frk_de) { frk_de++; if (r->top__DOT__mix_r | r->top__DOT__mix_g | r->top__DOT__mix_b) mix_nz++; }
+				if (r->top__DOT__mix_hs != last_mhs) { mix_hs_edges++; last_mhs = r->top__DOT__mix_hs; }
+				if (r->top__DOT__mix_vs != last_mvs) { mix_vs_edges++; last_mvs = r->top__DOT__mix_vs; }
+				mix_pixel(r->top__DOT__mix_hs, r->top__DOT__mix_vs, r->top__DOT__frk_de, r->top__DOT__mix_r, r->top__DOT__mix_g, r->top__DOT__mix_b);
+			}
+		}
+#endif
 		bool pix = top->clk_pix;
 		if (pix && !prev_pix) {
 			pix_clocks++;
@@ -518,7 +562,12 @@ int main(int argc, char **argv) {
 				fclose(f);
 				printf("DUMP track buffer frame %d %s\n", frame, d.file.c_str());
 			}
-			if (frame > 0 && (shot_frames.count(frame) || (shot_every && frame % shot_every == 0))) save_shot(frame);
+			if (frame > 0 && (shot_frames.count(frame) || (shot_every && frame % shot_every == 0))) {
+				save_shot(frame);
+#ifdef SIM_MIXER
+				save_mix_shot(frame);
+#endif
+			}
 			if (!quiet && frame % 50 == 0) { printf("FRAME %d lines=%d len=%d\n", frame, last_lines, last_line_len); fflush(stdout); }
 		}
 	}
@@ -526,6 +575,11 @@ int main(int argc, char **argv) {
 	save_disks();
 	printf("SD reads %llu writes %llu\n", (unsigned long long)sd_reads, (unsigned long long)sd_writes);
 	wav_close();
+#ifdef SIM_MIXER
+	printf("MIXER nonzero %llu ce %llu de %llu freak_de %llu hs_edges %llu vs_edges %llu arx %u ary %u\n", (unsigned long long)mix_nz, (unsigned long long)mix_ce, (unsigned long long)mix_de,
+		(unsigned long long)frk_de, (unsigned long long)mix_hs_edges, (unsigned long long)mix_vs_edges,
+		(unsigned)top->rootp->top__DOT__frk_arx, (unsigned)top->rootp->top__DOT__frk_ary);
+#endif
 	printf("DONE frame %d ticks %llu cpu_cycles %llu F14M %llu (cpu = F14M/%.3f)\n", frame, (unsigned long long)ticks, (unsigned long long)cpu_cycles, (unsigned long long)pix_clocks, (double)pix_clocks/cpu_cycles);
 	top->final();
 	delete top;

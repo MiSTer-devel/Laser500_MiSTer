@@ -26,3 +26,14 @@ clean:
 	rm -rf $(HL_DIR)
 
 .PHONY: all clean
+
+# video path check: the emu's video_mixer + video_freak on clk_2x -> obj_mix/Vtop
+MIX_SYS = sim_video_mixer.sv ../sys/scandoubler.v ../sys/hq2x.sv ../sys/gamma_corr.sv \
+          ../sys/video_freezer.sv ../sys/video_freak.sv ../sys/math.sv
+mixer: $(HL_RTL) sim_headless.cpp Makefile
+	verilator --cc --exe --build -j 0 -O3 --x-assign fast --x-initial fast --noassert \
+	  -Wno-fatal -Wno-WIDTH -Wno-PINMISSING -Wno-CASEINCOMPLETE -Wno-UNOPTFLAT -Wno-EOFNEWLINE \
+	  -Wno-PROCASSWIRE --public-flat-rw +define+SIMULATION=1 +define+SIM_MIXER=1 -CFLAGS "-O2 -std=c++17 -DSIM_MIXER" \
+	  --top-module top --Mdir obj_mix -LDFLAGS "-lz" \
+	  $(HL_RTL) $(MIX_SYS) sim_headless.cpp
+.PHONY: mixer
