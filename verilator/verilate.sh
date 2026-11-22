@@ -14,9 +14,5 @@ verilator \
 	../rtl/dpram.sv \
 	../rtl/rom_charset_alternate.v \
 	../rtl/rom_charset.v \
-	../rtl/tv80/tv80s.v \
-	../rtl/tv80/tv80_core.v \
-	../rtl/tv80/tv80_alu.v \
-	../rtl/tv80/tv80_reg.v \
-	../rtl/tv80/tv80_mcode.v \
+	t80sv_all.sv \
 	../rtl/sdram.v
