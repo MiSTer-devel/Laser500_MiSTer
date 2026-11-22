@@ -60,7 +60,7 @@ module laser500 (
 	input wire        tape_turbo_en,   // OSD Tape speed 2x
 	input wire        tape_deck_play,  // OSD Tape deck: Play
 	input wire        tape_audio_en,   // OSD Tape audio
-	input wire  [1:0] tape_pitch,      // OSD Tape pitch: 0 Normal, 1 +1.6%, 2 -1.6%
+	input wire  [1:0] tape_pitch,      // OSD Tape pitch: 0 Wow, 1 Steady, 2 +1.6%, 3 -1.6%
 	output wire       tape_ready,      // pulse: mounted/rewound, playable
 	output wire       tape_bad,        // pulse: format not supported
 	output wire       tape_loaded,

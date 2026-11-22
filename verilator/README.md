@@ -27,6 +27,10 @@ must be in `verilator/`. It is not in git.
 # a .prg at frame 100, then RUN
 ./obj_hl/Vtop --prg ../software/mister11/cross_chase.prg@100 --send-keys '110:RUN\n' --stop-at-frame 300 --screenshot 300
 
+# load a tape at 2x (TAPE status lines; hint 2 = TYPE RUN after the load)
+./obj_hl/Vtop --tape ../software/homebrew/RobertK/HTron/htron_laser500.cas --send-keys '70:CRUN\n' \
+    --stop-at-frame 3200 --screenshot-end
+
 # boot VT-DOS from a disk (.nic or .dsk), DIR
 ./obj_hl/Vtop --disk1 vt-dos.nic --send-keys '230:DIR\n' --stop-at-frame 450 --screenshot 450
 
@@ -48,9 +52,10 @@ Output lines start with a tag for grepping: `LOAD`, `MOUNT`, `SD`, `SHOT`,
 | run | `--stop-at-frame N`, `--reset-at-frame N`, `--quiet` |
 | media | `--rom F`, `--prg F[@FRAME]`, `--ioctl FRAME:INDEX:FILE` |
 | disks | `--disk1 F[@FRAME]`, `--disk2 F[@FRAME]`, `--disk1-ro`, `--disk2-ro`, `--disk1-save F`, `--disk2-save F`, `--fdc on\|off`, `--sd-latency N` |
+| tape | `--tape F[@FRAME]`, `--tape-speed normal\|2x`, `--tape-deck auto\|play`, `--tape-pitch steady\|+\|-` (default Wow), `--tape-audio`, `--tape-overlay off`, `--rewind-at-frame N`, `--tape-check` (every played sample against the WAV), `--stop-on-load` (end at the ROM's `LOADOK` 1766h or `LOADERR` 18F3h, always printed), `--stop-at-pos N` |
 | input | `--send-keys FRAME:TEXT` (`\n` `\b` `\e` `\t`), `--key-hold N`, `--key-gap N`, `--joy FRAME:HEX`, `--joy2 FRAME:HEX` |
 | output | `--screenshot N,..`, `--screenshot-every N`, `--screenshot-end`, `--screenshot-dir D`, `--screenshot-prefix P`, `--dump-ram FRAME:F` (256 KB, 16 KB pages 0-15), `--dump-track FRAME:F` (the floppy's 8 KB track buffer), `--audio-out F.wav` |
-| debug | `--io-log`, `--fdc-log`, `--key-log` |
+| debug | `--io-log`, `--fdc-log`, `--key-log`, `--m1-trace F1:F2` (opcode fetches with F14M clock and tape position, and tape port reads) |
 
 `DONE` reports the CPU clock as a fraction of F14M (about F14M/4.95: one wait
 state per memory cycle, as in laser500emu).

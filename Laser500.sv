@@ -97,7 +97,7 @@ localparam CONF_STR = {
 	"P4O[16],Tape audio,Off,On;",
 
 	"P5O[18],Tape deck,Auto,Play;",
-	"P5O[20:19],Tape pitch,Normal,+1.6%,-1.6%;",
+	"P5O[20:19],Tape pitch,Wow,Steady,+1.6%,-1.6%;",
 
 	"I,Tape ready (rewound),Tape format not supported;",
 

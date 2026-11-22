@@ -89,7 +89,9 @@ static void usage() {
 "  --tape-overlay off    OSD Tape overlay Off\n"
 "  --rewind-at-frame N   OSD Rewind tape\n"
 "  --tape-check          compare every played sample with the WAV\n"
-"  --tape-pitch +|-      OSD Tape pitch +1.6% / -1.6%\n"
+"  --tape-pitch steady|+|-   OSD Tape pitch Steady / +1.6% / -1.6% (default Wow)\n"
+"  --stop-on-load        end at the ROM's first LOADOK (1766h) or LOADERR (18F3h) (always printed)\n"
+"  --stop-at-pos N       end when the tape reaches sample N\n"
 "  --m1-trace F1:F2      log opcode fetches (F14M clock, bank:address) and tape port reads in frames F1-F2\n"
 "  --quiet\n");
 }
@@ -423,6 +425,23 @@ static void m1_tick() {
 	if (rd && !rseen) printf("RD %llu %04X\n", (unsigned long long)pix_clocks, r->top__DOT__laser500__DOT__cpu_addr);
 	rseen = rd;
 }
+// ROM load outcome (always on while a tape is mounted): 1766h good load,
+// 18F3h LOADING ERROR; --stop-on-load ends the run at the first one
+static bool stop_on_load = false, load_done = false;
+static unsigned stop_pos = 0;           // --stop-at-pos: end when the tape reaches this sample
+static void load_tick(int frame) {
+	static bool seen = false;
+	auto *r = top->rootp;
+	bool m1 = !r->top__DOT__laser500__DOT__cpu_m1_n && !r->top__DOT__laser500__DOT__cpu_mreq_n && r->top__DOT__laser500__DOT__cpu_bank == 0;
+	if (m1 && !seen) {
+		unsigned a = r->top__DOT__laser500__DOT__cpu_addr;
+		if (a == 0x1766 || a == 0x18F3) {
+			printf("%s frame %d pos %u\n", a == 0x1766 ? "LOADOK" : "LOADERR", frame, top->tape_pos);
+			if (stop_on_load) load_done = true;
+		}
+	}
+	seen = m1;
+}
 static std::vector<uint8_t> tape_expect;
 static uint64_t tape_checked = 0, tape_bad = 0;
 static void tape_expect_load() {
@@ -572,7 +591,9 @@ int main(int argc, char **argv) {
 		else if (a == "--tape-deck") tape_play = next() == "play";
 		else if (a == "--tape-audio") tape_audio = true;
 		else if (a == "--tape-check") tape_check = true;
-		else if (a == "--tape-pitch") { std::string v = next(); tape_pitch = v == "+" ? 1 : v == "-" ? 2 : 0; }
+		else if (a == "--tape-pitch") { std::string v = next(); tape_pitch = v == "steady" ? 1 : v == "+" ? 2 : v == "-" ? 3 : 0; }
+		else if (a == "--stop-on-load") stop_on_load = true;
+		else if (a == "--stop-at-pos") stop_pos = strtoul(next().c_str(), nullptr, 0);
 		else if (a == "--m1-trace") { std::string v = next(); m1_from = atoi(v.c_str()); m1_to = atoi(v.substr(v.find(':')+1).c_str()); }
 		else if (a == "--tape-overlay") tape_no_overlay = next() == "off";
 		else if (a == "--rewind-at-frame") rewind_frames.push_back(atoi(next().c_str()));
@@ -604,7 +625,7 @@ int main(int argc, char **argv) {
 
 	int last_frame = -1;
 	bool prev_pix = 0;
-	while (frame <= stop_frame && !Verilated::gotFinish()) {
+	while (frame <= stop_frame && !load_done && !(stop_pos && top->tape_pos >= stop_pos) && !Verilated::gotFinish()) {
 		top->clk_2x = !top->clk_2x;
 		top->eval();
 		ticks++;
@@ -636,6 +657,7 @@ int main(int argc, char **argv) {
 			tape_tick();
 			if (tape_check) tape_check_tick();
 			if (frame >= m1_from && frame <= m1_to) m1_tick();
+			if (!disk_opt[2].file.empty()) load_tick(frame);
 		}
 		prev_pix = pix;
 

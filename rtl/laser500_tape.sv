@@ -20,10 +20,12 @@
 // runs 2x, so the ROM's loops see the same pulse widths (tape standard
 // rule 7); a WAV needing more than 100 kB/s at 1x plays at 1x. Mounting and
 // Rewind start at sample 0. The machine's reset leaves the tape where it is.
-// `pitch` plays the samples 1/64 faster or slower, like a deck's speed trim
-// (rule 8: the samples are never changed). The ROM's leader sync before a
-// data block is phase sensitive (docs/CASSETTE_STATUS.md): a tape it rejects
-// at one speed may load at another.
+// `pitch` sets the playing rate (rule 8: the samples are never changed).
+// The ROM's leader sync before a data block is phase sensitive
+// (docs/CASSETTE_STATUS.md): with an exact rate the sync either always locks
+// or never does, so by default (Wow) the rate wanders like a real deck's: a
+// new random rate within +-1/64 every 2^18 clocks (18 ms). Steady plays at
+// the exact rate; +1.6% and -1.6% are a fixed speed trim.
 module laser500_tape #(
     parameter int unsigned CLK_HZ = 14697802
 ) (
@@ -41,7 +43,7 @@ module laser500_tape #(
     input  logic        rewind,      // OSD Rewind tape (pulse)
     input  logic        play,        // deck plays
     input  logic        turbo_ok,    // OSD Tape speed 2x, and the ROM is reading
-    input  logic  [1:0] pitch,       // OSD Tape pitch: 0 Normal, 1 +1.6%, 2 -1.6% (a deck's speed trim)
+    input  logic  [1:0] pitch,       // OSD Tape pitch: 0 Wow, 1 Steady, 2 +1.6%, 3 -1.6%
     output logic        level,       // comparator output (1 = above threshold)
     // status
     output logic        loaded,      // a playable tape is mounted
@@ -139,8 +141,18 @@ module laser500_tape #(
     logic [31:0] acc;
     wire  [31:0] hz32 = {14'd0, hz};
     wire  [31:0] rate_b = fast ? hz32 << 1 : hz32;
-    wire  [31:0] rate_x = pitch == 2'd1 ? rate_b + (rate_b >> 6) :
-                          pitch == 2'd2 ? rate_b - (rate_b >> 6) : rate_b;
+    // Wow: a new random rate in [-1/64, +1/64) every 2^18 clocks. Chosen by
+    // trials (docs/CASSETTE_STATUS.md): slower or wider was no better.
+    logic [15:0] lfsr = 16'hACE1;
+    logic [17:0] wtick = 0;
+    always_ff @(posedge clk) begin
+        wtick <= wtick + 18'd1;
+        if (wtick == 0) lfsr <= {lfsr[14:0], lfsr[15] ^ lfsr[13] ^ lfsr[12] ^ lfsr[10]};
+    end
+    wire  [31:0] rate_w = rate_b + (rate_b >> 12) * {25'd0, lfsr[6:0]} - (rate_b >> 6);
+    wire  [31:0] rate_x = pitch == 2'd0 ? rate_w :
+                          pitch == 2'd2 ? rate_b + (rate_b >> 6) :
+                          pitch == 2'd3 ? rate_b - (rate_b >> 6) : rate_b;
     wire         byte_rate_ok = !is_wav || ((hz32 << fshift) <= 32'd100000);
     assign fast = play && turbo_ok && byte_rate_ok && loaded && !at_end;
 
