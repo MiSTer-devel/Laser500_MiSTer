@@ -1,6 +1,6 @@
 # VTech Laser 350/500/700 for MiSTer
 
-The VTech Laser 350/500/700 are 1985 Z80 home computers with BASIC V3.0, 80/40-column text, graphics modes, a cassette port and an optional 5.25" floppy interface (VT-DOS). The core models a Laser 500 (64 KB RAM).
+The VTech Laser 350/500/700 are 1985 Z80 home computers with BASIC V3.0, 80/40-column text, graphics modes, a cassette port and an optional 5.25" floppy interface (VT-DOS). All three share the same ROM and differ in RAM: **Model** picks the Laser 350 (16 KB, the screen in the same 16 KB), Laser 500 (64 KB, default) or Laser 700 (128 KB; BASIC sees 64 KB, the rest is bank-switched RAM for programs). The ROM sizes the RAM at boot: `PRINT FRE(0)` gives 5221 on a 350 and 29797 on a 500 or 700.
 
 Based on Nippur72's MiST core and his browser emulator laser500emu, which is the timing reference for the CPU, the floppy and the tape.
 
@@ -16,12 +16,12 @@ Put these in `games/LASER500/`:
 The menu follows the MiSTer computer-core layout: the media on the top page, the settings on pages.
 
 - **Top page:** Pri. disk 1, Disk 2 (hidden while Disk interface is Off), Tape, Load Program, Load ROM; then Machine, Video, Audio and Advanced; then **Apply and reset**.
-- **Machine:** Disk interface (Auto, Off), Tape speed (2x, Normal), Rewind tape.
+- **Machine:** Model (Laser 500, Laser 350, Laser 700), Disk interface (Auto, Off), Tape speed (2x, Normal), Rewind tape.
 - **Video:** Character set (Standard, Alternate), Aspect ratio, Scale, Vertical crop, Scandoubler Fx, Tape overlay.
 - **Audio:** Tape audio.
 - **Advanced:** Tape deck (Auto, Play), Tape pitch (Wow, Steady, +1.6%, -1.6%).
 
-Disk interface and Character set change the machine, so they wait for **Apply and reset** (the top page shows "Changes pending" until then). Everything else acts at once.
+Model, Disk interface and Character set change the machine, so they wait for **Apply and reset** (the top page shows "Changes pending" until then). Everything else acts at once.
 
 - **Aspect ratio Original** is the Laser's real picture shape (1.30:1 with the border, 798 x 307 pixels at 14.78 MHz). **Scale** V-Integer gives 3x at 1080p. **Vertical crop 216p(5x)** shows 216 of the 307 lines, the whole 192-line text area with a little border, at 5x on a 1080p display. On HDMI leave Scandoubler Fx at None for the biggest integer picture: with it on, the scaler sees twice the lines and V-Integer drops to 1x.
 
@@ -64,7 +64,7 @@ The built-in speaker (latch bit 0), at one level. Tape audio adds the cassette s
 
 # Known limitations
 
-- The Laser 350 (16 KB) and 700 RAM configurations are not modelled; the machine is a Laser 500.
+- The Laser 350 lacks the TAB, ESC, BS and GRAPH keys; the core still accepts them from the PC keyboard. The 350's 64 KB RAM expansion module is not modelled (choose Laser 500 instead).
 - Speaker B (latch bit 5) is not output.
 - The CPU runs at the speed laser500emu uses (one wait state per memory cycle); this matches software timed on real hardware, but is not measured against a real machine.
 

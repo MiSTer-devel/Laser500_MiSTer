@@ -13,6 +13,7 @@ module VTL_chip
    output           CPUCK,       // CPU clock to CPU (F14M / 4) - (not used on the MiST, we use F14M & CPUENA)
 	output           CPUENA,      // CPU enabled signal
 	input            TURBO,       // CPU at 2x (tape turbo): the same bus cycle on a 2-clock beat
+	input      [1:0] MODEL,       // RAM: 0 Laser 500 pages 4-7, 1 Laser 350 page 3, 2 Laser 700 pages 4-B
 	output     [3:0] cpu_bank,    // bank selected by A (ROM pages 0-1)
 	output           WAIT_n,      // WAIT (TODO handle wait states)
 	input            MREQ_n,      // MEMORY REQUEST (not used--yet) indicates the bus holds a valid memory address
@@ -710,7 +711,11 @@ assign b =
 	wire  [3:0] bank          = banks[bank_bits];
 	wire  [1:0] bank_bits     = A[15:14];  
 	wire [13:0] base_addr     = A[13:0];	
-	wire        bank_is_ram   = bank >= 4 && bank <=7;  // TODO 350/700 ram config
+	// RAM pages by model (MAME vtech2.cpp memory maps); the ROM sizes the RAM
+	// at boot and puts the screen in page 3 (350) or 7 (port 44h bit 3)
+	wire        bank_is_ram   = MODEL == 2'd1 ? bank == 4'h3 :
+	                            MODEL == 2'd2 ? bank >= 4'h4 && bank <= 4'hB :
+	                                            bank >= 4'h4 && bank <= 4'h7;
 	wire        mapped_io     = bank == 2 && (base_addr >= 14'h2800 && base_addr <= 14'h2FFF);
 	
 	wire [24:0] videoAddress   = (vdc_page_7 == 1) ? { 7'd0, 4'h7, ramAddress } : { 7'd0, 4'h3, ramAddress };

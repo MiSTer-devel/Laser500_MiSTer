@@ -17,6 +17,7 @@ module laser500 (
 	output wire vblank,
 
 	input wire  alt_font,
+	input wire  [1:0] model,       // 0 Laser 500, 1 Laser 350, 2 Laser 700 (RAM size)
 	
 	input wire [31:0] joystick_0,
 	input wire [31:0] joystick_1,
@@ -203,6 +204,7 @@ VTL_chip VTL_chip
     .CPUCK    ( CPUCK         ),
 	.CPUENA   ( CPUENA        ),
 	.TURBO    ( tape_fast     ),
+	.MODEL    ( model         ),
 	.cpu_bank ( cpu_bank      ),
 	.MREQ_n   ( cpu_mreq_n    ),	
 	.IORQ_n   ( cpu_iorq_n    ),
@@ -342,9 +344,9 @@ wire [7:0]  eraser_data;
 
 eraser 
 #(
-	// erases from page 3 to page 7 (all 64K RAM)
+	// erases pages 3 to B: the RAM of every model (350: 3, 500: 4-7, 700: 4-B)
 	.START_RAM( { 7'd0, 4'h3, 14'b0 }),  
-	.END_RAM  ( { 7'd0, 4'h8, 14'b0 })  
+	.END_RAM  ( { 7'd0, 4'hC, 14'b0 })  
 )
 eraser
 (

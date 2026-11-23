@@ -59,7 +59,7 @@ wire        reset;
 // status bits: 0 Apply and reset; 2 Character set; 6 Disk interface;
 // 9:8 Scale; 10 Vertical crop; 13:11 Scandoubler Fx; 14 Tape speed;
 // 15 Tape overlay; 16 Tape audio; 17 Rewind tape; 18 Tape deck;
-// 20:19 Tape pitch;
+// 20:19 Tape pitch; 22:21 Model;
 // 122:121 Aspect ratio. The video, audio and tape rows act at once
 // (status, not cfg, and not in pending; tape standard rules 1-2).
 localparam CONF_STR = {
@@ -81,6 +81,7 @@ localparam CONF_STR = {
 	"h0-,Changes pending;",
 	"R[0],Apply and reset;",
 
+	"P1O[22:21],Model,Laser 500,Laser 350,Laser 700;",
 	"P1O[6],Disk interface,Auto,Off;",
 	"P1O[14],Tape speed,2x,Normal;",
 	"P1-;",
@@ -121,7 +122,7 @@ wire  [7:0] ioctl_data;
 wire [31:0] joystick_0, joystick_1;
 wire st_alt_font = cfg[2];
 
-wire pending = {status[2], status[6]} != {cfg[2], cfg[6]};
+wire pending = {status[22:21], status[2], status[6]} != {cfg[22:21], cfg[2], cfg[6]};
 wire fdc_off = status[6];          // hide the disk rows as soon as it is chosen
 
 // floppy (S0/S1), tape (S2)
@@ -402,6 +403,7 @@ laser500 laser500 (
 	.vblank(vblank),
 
 	.alt_font(st_alt_font),
+	.model(cfg[22:21]),        // 0 Laser 500 (64 KB), 1 Laser 350 (16 KB), 2 Laser 700 (128 KB)
 
 	.AUDIO_L(AUDIO_L),
 	.AUDIO_R(AUDIO_R),
