@@ -17,6 +17,7 @@ module laser500 (
 	output wire vblank,
 
 	input wire  alt_font,
+	input wire  [1:0] font_bank,   // char ROM bank: 0 English, 2 German, 3 French
 	input wire  [1:0] model,       // 0 Laser 500, 1 Laser 350, 2 Laser 700 (RAM size)
 	
 	input wire [31:0] joystick_0,
@@ -246,6 +247,11 @@ VTL_chip VTL_chip
 	.CASIN        ( CASIN   ),
 	
 	.alt_font     ( alt_font ),
+	.font_bank    ( font_bank ),
+	// OSD Load Char ROM (index 3): 8 KB into the char ROM, all four banks
+	.chr_wr       ( ioctl_download && ioctl_index[5:0] == 6'd3 && ioctl_wr && ioctl_addr < 25'h2000 ),
+	.chr_addr     ( ioctl_addr[12:0] ),
+	.chr_data     ( ioctl_data ),
 	.cnt          ( ),
 	
 	.fdc_en       ( fdc_enable ),

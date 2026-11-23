@@ -56,10 +56,10 @@ wire        reset;
 // OSD (~/dev2/osd-standard.md): media on the top page, then P1 Machine,
 // P2 Video, "Changes pending" and Apply and reset. Settings are taken from
 // the OSD at every reset (cfg).
-// status bits: 0 Apply and reset; 2 Character set; 6 Disk interface;
+// status bits: 0 Apply and reset; 6 Disk interface;
 // 9:8 Scale; 10 Vertical crop; 13:11 Scandoubler Fx; 14 Tape speed;
 // 15 Tape overlay; 16 Tape audio; 17 Rewind tape; 18 Tape deck;
-// 20:19 Tape pitch; 22:21 Model;
+// 20:19 Tape pitch; 22:21 Model; 24:23 Character set;
 // 122:121 Aspect ratio. The video, audio and tape rows act at once
 // (status, not cfg, and not in pending; tape standard rules 1-2).
 localparam CONF_STR = {
@@ -72,6 +72,7 @@ localparam CONF_STR = {
 	"S2,WAVCAS,Tape;",
 	"F1,PRGBIN,Load Program;",
 	"F0,ROM,Load ROM;",
+	"F3,ROM,Load Char ROM;",
 	"-;",
 	"P1,Machine;",
 	"P2,Video;",
@@ -87,7 +88,7 @@ localparam CONF_STR = {
 	"P1-;",
 	"P1R[17],Rewind tape;",
 
-	"P2O[2],Character set,Standard,Alternate;",
+	"P2O[24:23],Character set,English,German,French,Alternate;",
 	"P2-;",
 	"P2O[122:121],Aspect ratio,Original,Full Screen,[ARC1],[ARC2];",
 	"P2O[9:8],Scale,Normal,V-Integer,Narrower HV-Integer,Wider HV-Integer;",
@@ -120,9 +121,10 @@ wire [24:0] ioctl_addr;
 wire  [7:0] ioctl_data;
 
 wire [31:0] joystick_0, joystick_1;
-wire st_alt_font = cfg[2];
+wire st_alt_font  = cfg[24:23] == 2'd3;
+wire [1:0] st_font_bank = cfg[24:23] == 2'd1 ? 2'd2 : cfg[24:23] == 2'd2 ? 2'd3 : 2'd0;
 
-wire pending = {status[22:21], status[2], status[6]} != {cfg[22:21], cfg[2], cfg[6]};
+wire pending = {status[24:21], status[6]} != {cfg[24:21], cfg[6]};
 wire fdc_off = status[6];          // hide the disk rows as soon as it is chosen
 
 // floppy (S0/S1), tape (S2)
@@ -403,6 +405,7 @@ laser500 laser500 (
 	.vblank(vblank),
 
 	.alt_font(st_alt_font),
+	.font_bank(st_font_bank),
 	.model(cfg[22:21]),        // 0 Laser 500 (64 KB), 1 Laser 350 (16 KB), 2 Laser 700 (128 KB)
 
 	.AUDIO_L(AUDIO_L),

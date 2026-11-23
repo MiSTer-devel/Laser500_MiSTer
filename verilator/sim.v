@@ -22,6 +22,7 @@ module top
 	input  [31:0] joystick_0,
 	input  [31:0] joystick_1,
 	input         alt_font,
+	input   [1:0] font_bank,
 	input   [1:0] model,
 
 	input         ioctl_download,
@@ -164,6 +165,7 @@ laser500 laser500
 	.vblank(vblank),
 
 	.alt_font(alt_font),
+	.font_bank(font_bank),
 	.model(model),
 
 	.joystick_0(joystick_0),

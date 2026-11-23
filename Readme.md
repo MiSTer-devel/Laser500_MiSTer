@@ -10,18 +10,19 @@ Put these in `games/LASER500/`:
 
 - **`boot.rom`** (required): the 32 KB system ROM, `27-0401-00-00.u6` from MAME's `laser500` set (CRC32 `9bed01f7`). It loads at every core start; **Load ROM** replaces it for the session.
 - Programs (`.prg`, `.bin`) for **Load Program**, disks (`.nic`, `.dsk`) and tapes (`.wav`, `.cas`).
+- Optionally a character ROM for **Load Char ROM**: 8 KB, laid out like `27-393-00.u10` from MAME's `laser500` set (CRC32 `d47313a2`): four 2 KB banks, English, a test pattern, German and French. The core already contains that ROM; a loaded one replaces it until the core is reloaded.
 
 # OSD
 
 The menu follows the MiSTer computer-core layout: the media on the top page, the settings on pages.
 
-- **Top page:** Pri. disk 1, Disk 2 (hidden while Disk interface is Off), Tape, Load Program, Load ROM; then Machine, Video, Audio and Advanced; then **Apply and reset**.
+- **Top page:** Pri. disk 1, Disk 2 (hidden while Disk interface is Off), Tape, Load Program, Load ROM, Load Char ROM; then Machine, Video, Audio and Advanced; then **Apply and reset**.
 - **Machine:** Model (Laser 500, Laser 350, Laser 700), Disk interface (Auto, Off), Tape speed (2x, Normal), Rewind tape.
-- **Video:** Character set (Standard, Alternate), Aspect ratio, Scale, Vertical crop, Scandoubler Fx, Tape overlay.
+- **Video:** Character set (English, German, French, Alternate), Aspect ratio, Scale, Vertical crop, Scandoubler Fx, Tape overlay.
 - **Audio:** Tape audio.
 - **Advanced:** Tape deck (Auto, Play), Tape pitch (Wow, Steady, +1.6%, -1.6%).
 
-Model, Disk interface and Character set change the machine, so they wait for **Apply and reset** (the top page shows "Changes pending" until then). Everything else acts at once.
+Model, Disk interface and Character set change the machine, so they wait for **Apply and reset** (the top page shows "Changes pending" until then). Everything else acts at once. Character set picks a bank of the character ROM, which holds English, German and French sets: German shows `@[\]{|}~` as `§ÄÖÜäöüß`, French as `à°ç§éùè¨`. Alternate is the MiST core's English set with Commodore 64-style letters.
 
 - **Aspect ratio Original** is the Laser's real picture shape (1.30:1 with the border, 798 x 307 pixels at 14.78 MHz). **Scale** V-Integer gives 3x at 1080p. **Vertical crop 216p(5x)** shows 216 of the 307 lines, the whole 192-line text area with a little border, at 5x on a 1080p display. On HDMI leave Scandoubler Fx at None for the biggest integer picture: with it on, the scaler sees twice the lines and V-Integer drops to 1x.
 

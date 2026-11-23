@@ -30,7 +30,7 @@ wire        dio_wr;
 wire [24:0] dio_addr;
 wire [7:0]  dio_data;
 
-assign dio_dowloading = ioctl_download;
+assign dio_dowloading = ioctl_download & (ioctl_index[5:0] <= 6'd1); // ROM and PRG only (3 is the char ROM, loaded in VTL_chip)
 assign dio_index = ioctl_index;      
 assign dio_wr = ioctl_wr;
 assign dio_addr = ioctl_addr;

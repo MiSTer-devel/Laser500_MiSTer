@@ -33,6 +33,7 @@ static std::string shot_dir = ".";
 static std::string shot_prefix = "frame";
 static int stop_frame = 200;
 static int model = 0;                    // --model 350|500|700
+static int charset = 0;                  // --charset english|german|french|alternate
 static std::set<int> shot_frames;
 static int shot_every = 0;
 static bool shot_end = false;
@@ -94,6 +95,8 @@ static void usage() {
 "  --stop-on-load        end at the ROM's first LOADOK (1766h) or LOADERR (18F3h) (always printed)\n"
 "  --stop-at-pos N       end when the tape reaches sample N\n"
 "  --model 350|500|700  OSD Model (default 500)\n"
+"  --charset english|german|french|alternate  OSD Character set (default english;\n"
+"                       --ioctl FRAME:3:F loads a char ROM as the OSD Load Char ROM)\n"
 "  --m1-trace F1:F2      log opcode fetches (F14M clock, bank:address) and tape port reads in frames F1-F2\n"
 "  --quiet\n");
 }
@@ -577,6 +580,7 @@ int main(int argc, char **argv) {
 		else if (a == "--quiet") quiet = true;
 		else if (a == "--key-log") key_log = true;
 		else if (a == "--fdc-log") fdc_log = true;
+		else if (a == "--charset") { std::string v = next(); charset = v == "german" ? 1 : v == "french" ? 2 : v == "alternate" ? 3 : 0; }
 		else if (a == "--model") { std::string v = next(); model = v == "350" ? 1 : v == "700" ? 2 : 0; }
 		else if (a == "--fdc") fdc_force = next() == "on";
 		else if (a == "--sd-latency") sd_latency = atoi(next().c_str());
@@ -618,7 +622,8 @@ int main(int argc, char **argv) {
 	top->reset = 1;
 	top->ps2_key = 0;
 	top->joystick_0 = top->joystick_1 = 0;
-	top->alt_font = 0;
+	top->alt_font  = charset == 3;
+	top->font_bank = charset == 1 ? 2 : charset == 2 ? 3 : 0;
 	top->model = model;
 	top->fdc_enable = fdc_force >= 0 ? fdc_force : (!disk_opt[0].file.empty() || !disk_opt[1].file.empty());
 	top->sd_ack = 0; top->img_mounted = 0;

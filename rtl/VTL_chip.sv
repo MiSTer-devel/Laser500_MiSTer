@@ -59,6 +59,10 @@ module VTL_chip
 	output reg CASOUT,   // mapped I/O bit 2  		
 	
 	input  alt_font,
+	input      [1:0] font_bank,   // char ROM bank: 0 English, 2 German, 3 French (1 is a test pattern)
+	input            chr_wr,      // char ROM load from the OSD (8 KB, all four banks)
+	input     [12:0] chr_addr,
+	input      [7:0] chr_data,
 	output [2:0] cnt,
 	
 	// floppy interface, ports 10h-13h: one strobe per I/O cycle
@@ -151,14 +155,19 @@ assign charsetQ = (!alt_font) ? charsetQ_std : charsetQ_alt;
 // CHARSET ROM
 //******************************************************************************************************************************
 
-dpram #(8, 14,"../hex/charset8knew.hex") rom_charset
+dpram #(8, 13,"../hex/charset8knew.hex") rom_charset
 (
 	.clock_a(F14M),
 	.address_a(charsetAddress),
 	//.enable_a(1'b1),
 	.wren_a(1'b0),
 	.data_a(),
-	.q_a(charsetQ_std)
+	.q_a(charsetQ_std),
+	.clock_b(F14M),
+	.wren_b(chr_wr),
+	.address_b(chr_addr),
+	.data_b(chr_data),
+	.q_b()
 );
 
 //******************************************************************************************************************************
@@ -518,7 +527,7 @@ always@(posedge F14M) begin
 			// read character from RAM and stores into latch "ramData", starts ROM reading   
 			if(xcnt[2:0] == 1) begin
 				ramData <= sdram_dout;			
-				charsetAddress <= (sdram_dout << 3) | ycnt[2:0]; // TODO eng/ger/fra				
+				charsetAddress <= {font_bank, sdram_dout, ycnt[2:0]};				
 			end		
 			
 			// calculate RAM address 					
