@@ -71,7 +71,7 @@ The built-in speaker (latch bit 0), at one level. Tape audio adds the cassette s
 
 # Credits
 
-- Nippur72 (Antonino Porcino): the MiST core, laser500emu and laser500-wav.
+- Nippur72 (Antonino Porcino): the [MiST core](https://github.com/nippur72/Laser500_MiST) this port is based on, laser500emu and laser500-wav.
 - Bonstra: Laser 500 documentation (ROM, I/O ports, floppy).
 - MAME (vtech2 driver, Juergen Buchmueller and others).
 - The MC6847 font used by the tape overlay comes from MAME's m6847 via the PC-6001 core.
